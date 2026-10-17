@@ -1,4 +1,4 @@
-// ============================================================
+/ ============================================================
 //  My GBA game - Step 3: a little Pokemon-style town
 //  No libraries needed. Works with devkitARM + gba.specs.
 // ============================================================
@@ -615,4 +615,4 @@ int main(void) {
     if (keys & KEY_DOWN)  { dy =  1; dir = DIR_DOWN;  }
 
     // Move one pixel at a time so we stop exactly at a wall.
-    // Left/r
+    // Left/ri
