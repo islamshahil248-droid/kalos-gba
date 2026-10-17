@@ -1,4 +1,4 @@
-/ ============================================================
+// ============================================================
 //  My GBA game - Step 3: a little Pokemon-style town
 //  No libraries needed. Works with devkitARM + gba.specs.
 // ============================================================
@@ -52,7 +52,7 @@
 #define WHITE   RGB15(31, 31, 31)
 
 // Directions the trainer can face
-enum { DIR_DOWN, DIR_UP, DIR_LEFT, DIR_RIGHT };
+enum { DIR_DOWN, ... };
 
 // Kinds of map tiles.
 // Everything from T_TREE onwards is SOLID (the trainer can't walk on it).
