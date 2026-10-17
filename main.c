@@ -159,9 +159,13 @@ static const char art_tree[16][17] = {
 // We build each picture once at the start, then just copy from these
 // boxes while the game runs (fast!).
 static unsigned short tile_gfx[4][TILE * TILE];
-static unsigned short sprite_gfx[4][TILE * TILE];
-static unsigned char  map_kind[MAP_H][MAP_W];   // the map as numbers
 
+// Two frames for each of the four directions.
+static unsigned short sprite_gfx[4][2][TILE * TILE];
+
+static unsigned char map_kind[MAP_H][MAP_W];
+static int walk_frame = 0;
+static int walk_timer = 0;
 // Turn a letter from the pixel art into a color.
 static unsigned short letter_color(char c) {
   switch (c) {
@@ -262,19 +266,55 @@ static void build_tiles(void) {
 }
 
 static void build_sprites(void) {
-  int x, y;
-  for (y = 0; y < TILE; y++) {
-    for (x = 0; x < TILE; x++) {
-      int i = y * TILE + x;
-      sprite_gfx[DIR_DOWN][i]  = letter_color(art_down[y][x]);
-      sprite_gfx[DIR_UP][i]    = letter_color(art_up[y][x]);
-      sprite_gfx[DIR_LEFT][i]  = letter_color(art_left[y][x]);
-      // Facing right = the left picture read backwards
-      sprite_gfx[DIR_RIGHT][i] = letter_color(art_left[y][TILE - 1 - x]);
+int x, y;
+int dir;
+
+for (y = 0; y < TILE; y++) {
+for (x = 0; x < TILE; x++) {
+int i = y * TILE + x;
+
+  sprite_gfx[DIR_DOWN][0][i] =
+      letter_color(art_down[y][x]);
+
+  sprite_gfx[DIR_UP][0][i] =
+      letter_color(art_up[y][x]);
+
+  sprite_gfx[DIR_LEFT][0][i] =
+      letter_color(art_left[y][x]);
+
+  sprite_gfx[DIR_RIGHT][0][i] =
+      letter_color(art_left[y][TILE - 1 - x]);
+}
+
+}
+
+// Create the second walking frame.
+for (dir = 0; dir < 4; dir++) {
+for (y = 0; y < TILE; y++) {
+for (x = 0; x < TILE; x++) {
+int i = y * TILE + x;
+int source_x = x;
+
+    // Move the two feet apart slightly in the
+    // alternate frame.
+    if (y >= 14) {
+      if (x < 8)
+        source_x = x + 1;
+      else
+        source_x = x - 1;
+    }
+
+    if (source_x >= 0 && source_x < TILE) {
+      sprite_gfx[dir][1][i] =
+          sprite_gfx[dir][0][y * TILE + source_x];
+    } else {
+      sprite_gfx[dir][1][i] = CLEAR;
     }
   }
 }
 
+}
+}
 // ---------- Drawing ----------
 // Paint a rectangle of the screen: left/top are included, right/bottom are not.
 // For EVERY pixel we first work out the final color (map, with the trainer
@@ -302,7 +342,7 @@ static void paint_box(int left, int top, int right, int bottom,
 
       // 2) the trainer's color on top, unless that pixel is see-through
       if (in_rows && sx >= px && sx < px + TILE) {
-        unsigned short c = sprite_gfx[dir][(sy - py) * TILE + (sx - px)];
+        unsigned short c = sprite_gfx[dir][walk_frame][(sy - py) * TILE + (sx - px)];
         if (c != CLEAR) color = c;
       }
 
@@ -410,8 +450,8 @@ int main(void) {
   while (1) {
     unsigned short keys;
     int old_x = x, old_y = y, old_dir = dir;
-    int dx = 0, dy = 0;
-
+int old_walk_frame = walk_frame;
+int dx = 0, dy = 0;
     wait_vblank();
     frame++;
 
@@ -431,13 +471,32 @@ int main(void) {
 
     // Only repaint if something changed. We repaint one box that covers both
     // the old and the new trainer position (at most 18x18 pixels).
-    if (x != old_x || y != old_y || dir != old_dir) {
-      int left   = (x < old_x) ? x : old_x;
-      int top    = (y < old_y) ? y : old_y;
-      int right  = ((x > old_x) ? x : old_x) + TILE;
-      int bottom = ((y > old_y) ? y : old_y) + TILE;
-      paint_box(left, top, right, bottom, x, y, dir);
-    }
+    {
+int moved = (x != old_x || y != old_y);
+
+if (moved) {
+walk_timer++;
+
+if (walk_timer >= 6) {
+  walk_timer = 0;
+  walk_frame = 1 - walk_frame;
+}
+
+} else {
+walk_timer = 0;
+walk_frame = 0;
+}
+
+if (moved || dir != old_dir || walk_frame != old_walk_frame) {
+int left   = (x < old_x) ? x : old_x;
+int top    = (y < old_y) ? y : old_y;
+int right  = ((x > old_x) ? x : old_x) + TILE;
+int bottom = ((y > old_y) ? y : old_y) + TILE;
+
+paint_box(left, top, right, bottom, x, y, dir);
+
+}
+}
 
 #if DEBUG_HUD
     show_lamps(frame, keys,
