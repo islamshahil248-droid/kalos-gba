@@ -447,7 +447,6 @@ static void build_sprites(void) {
       for (x = 0; x < TILE; x++) {
         int i = y * TILE + x;
         int source_x = x;
-
         // Move the two feet apart slightly in the alternate frame.
         if (y >= 14) {
           if (x < 8)
@@ -615,4 +614,45 @@ int main(void) {
     if (keys & KEY_DOWN)  { dy =  1; dir = DIR_DOWN;  }
 
     // Move one pixel at a time so we stop exactly at a wall.
-    // Left/ri
+    // Left/right and up/down are checked separately so you slide along walls.
+    for (n = 0; n < SPEED; n++) {
+      if (dx != 0 && can_stand(x + dx, y)) x += dx;
+      if (dy != 0 && can_stand(x, y + dy)) y += dy;
+    }
+
+    // Only repaint if something changed. We repaint one box that covers both
+    // the old and the new trainer position (at most 18x18 pixels).
+    {
+      int moved = (x != old_x || y != old_y);
+
+      if (moved) {
+        walk_timer++;
+
+        if (walk_timer >= 6) {
+          walk_timer = 0;
+          walk_frame = 1 - walk_frame;
+        }
+      } else {
+        walk_timer = 0;
+        walk_frame = 0;
+      }
+
+      if (moved || dir != old_dir || walk_frame != old_walk_frame) {
+        int left   = (x < old_x) ? x : old_x;
+        int top    = (y < old_y) ? y : old_y;
+        int right  = ((x > old_x) ? x : old_x) + TILE;
+        int bottom = ((y > old_y) ? y : old_y) + TILE;
+
+        paint_box(left, top, right, bottom, x, y, dir);
+      }
+    }
+
+#if DEBUG_HUD
+    show_lamps(frame, keys,
+               (x != old_x || y != old_y),
+               ((dx != 0 || dy != 0) && x == old_x && y == old_y));
+#endif
+  }
+}
+
+// ===== END OF main.c (if you can see this line, the file is complete) =====
