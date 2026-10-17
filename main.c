@@ -138,20 +138,20 @@ static const char art_left[16][17] = {
 //   K outline   L leaf   D dark leaf   R trunk
 static const char art_tree[16][17] = {
   "................",
-  "....KKKKKKKK....",
-  "...KLLLLLLLLK...",
-  "..KLLLDLLLLLLK..",
-  "..KLLLLLLDLLLK..",
-  ".KLLDLLLLLLLLLK.",
-  ".KLLLLLLLLDLLLK.",
+  ".....KKKKKK.....",
+  "...KKKLLLLKKK...",
+  "..KLLLLLLLLLLK..",
   ".KLLLLDLLLLLLLK.",
-  "..KLLLLLLLLDLK..",
-  "..KDLLLLLLLLLK..",
-  "...KKLLLLLLKK...",
+  ".KLLLDLLLLDLLLK.",
+  "KLLLLLLLLLLLLLLK",
+  "KLLDLLLLLLLDLLLK",
+  "KLLLLDLLLLLLLLLK",
+  ".KLLLLLLLLLLLLK.",
+  "..KKLLLLLLLLKK..",
   "....KKKRRKKK....",
-  ".......KRRK.....",
-  ".......KRRK.....",
-  "......KKRRKK....",
+  "......KRRK......",
+  "......KRRK......",
+  ".....KKRRKK.....",
   "................"
 };
 
