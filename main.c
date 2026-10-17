@@ -654,5 +654,3 @@ int main(void) {
 #endif
   }
 }
-
-// ===== END OF main.c (if you can see this line, the file is complete) =====
