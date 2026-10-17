@@ -1,5 +1,5 @@
 // ============================================================
-//  My GBA game - Step 2: a trainer walking on a grassy map
+//  My GBA game - Step 3: a little Pokemon-style town
 //  No libraries needed. Works with devkitARM + gba.specs.
 // ============================================================
 
@@ -37,7 +37,7 @@
 #define START_TY 8
 
 // The "body box" used for bumping into things. These are offsets inside the
-// 16x16 sprite: the trainer is blocked when this box touches a tree.
+// 16x16 sprite: the trainer is blocked when this box touches a solid tile.
 #define HB_LEFT   2
 #define HB_RIGHT  13
 #define HB_TOP    1
@@ -47,26 +47,47 @@
 // Real colors never use the top bit, so this can't clash with them.
 #define CLEAR 0x8000
 
+// Colors used by the building art
+#define OUTLINE RGB15(2, 2, 5)
+#define WHITE   RGB15(31, 31, 31)
+
 // Directions the trainer can face
 enum { DIR_DOWN, DIR_UP, DIR_LEFT, DIR_RIGHT };
 
-// Kinds of map tiles
-enum { T_GRASS, T_PATH, T_FLOWER, T_TREE };
+// Kinds of map tiles.
+// Everything from T_TREE onwards is SOLID (the trainer can't walk on it).
+// Keep T_TREE as the first solid one: is_blocked() relies on that order.
+enum {
+  T_GRASS, T_PATH, T_FLOWER,          // walkable
+  T_TREE,                             // solid from here on
+  T_ROOF_H1, T_ROOF_H2,               // roofs of the two houses
+  T_WALL_H,  T_DOOR_H,                // house wall (with window) and door
+  T_ROOF_C,  T_SIGN_C, T_WALL_C, T_DOOR_C,   // Pokemon Center
+  T_ROOF_M,  T_SIGN_M, T_WALL_M, T_DOOR_M,   // Poke Mart
+  NUM_TILES
+};
 
 // ---------- The map ----------
-// G = grass, P = path, F = flowers, T = tree (trees block you).
+// Walkable:
+//   G grass   P path   F flowers
+// Solid:
+//   T tree
+//   House:   H roof (orange)  J roof (purple)  h wall+window  D door
+//   Center:  R roof (red)     r roof with "P" sign  C wall  c door
+//   Mart:    U roof (blue)    u roof with "M" sign  M wall  m door
 // Each row is 15 letters, and there are 10 rows. Edit it and have fun!
+// Keep the top row all trees: the test lamps are drawn there.
 static const char map_rows[MAP_H][MAP_W + 1] = {
-  "TTTTTTTTTTTTTTT",
-  "TGGGGGGGGGGGGGT",
-  "TGFGGGGGTGGGFGT",
-  "TGGGGGPPPPPPPGT",
-  "TGGGGGPGGGGGGGT",
-  "TGGFGGPGGGGFGGT",
-  "TGGGGGPGGGTGGGT",
-  "TGTGGGPGGGGGGGT",
-  "TGGGFGPGGGGGGGT",
-  "TTTTTTPTTTTTTTT"
+"TTTTTTTTTTTTTTT",
+"THHHGGRrRGGUuUT",
+"ThDhGFCcCFGMmMT",
+"TGPPPPPPPPPPPGT",
+"TGFGGGPGGGGFGGT",
+"TGTGGGPGGJJJGTT",
+"TGGGFGPGGhDhGGT",
+"TGTGGGPPPPPGGTT",
+"TGGGFGPGGGGGFGT",
+"TTTTTTPTTTTTTTT"
 };
 
 // ---------- Pixel art ----------
@@ -77,88 +98,109 @@ static const char map_rows[MAP_H][MAP_W + 1] = {
 // The sprite is 16 letters wide and 16 rows tall.
 
 static const char art_down[16][17] = {
-  "................",
-  "....KKKKKKKK....",
-  "...KBBBBBBBBK...",
-  "..KBBBBBBBBBBK..",
-  "..KBBBBBBBBBBK..",
-  "..KKKKKKKKKKKK..",
-  "..KSSSSSSSSSSK..",
-  "..KSSKSSSSKSSK..",
-  "..KSSSSSSSSSSK..",
-  "...KSSSSSSSSK...",
-  "..KKYYYYYYYYKK..",
-  ".KSKYYYYYYYYKSK.",
-  ".KSKYYYYYYYYKSK.",
-  ".KKKJJJJJJJJKKK.",
-  "...KJJJKKJJJK...",
-  "...KRRRK.KRRRK.."
+"................",
+"....KKKKKKKK....",
+"...KBBBBBBBBK...",
+"..KBBBBBBBBBBK..",
+"..KBBBBBBBBBBK..",
+"..KKKKKKKKKKKK..",
+"..KSSSSSSSSSSK..",
+"..KSSKSSSSKSSK..",
+"..KSSSSSSSSSSK..",
+"...KSSSSSSSSK...",
+"..KKYYYYYYYYKK..",
+".KSKYYYYYYYYKSK.",
+".KSKYYYYYYYYKSK.",
+".KKKJJJJJJJJKKK.",
+"...KJJJKKJJJK...",
+"...KRRRK.KRRRK.."
 };
 
 static const char art_up[16][17] = {
-  "................",
-  "....KKKKKKKK....",
-  "...KBBBBBBBBK...",
-  "..KBBBBBBBBBBK..",
-  "..KBBBBBBBBBBK..",
-  "..KBBBBBBBBBBK..",
-  "..KHHHHHHHHHHK..",
-  "..KHHHHHHHHHHK..",
-  "..KHHHHHHHHHHK..",
-  "...KHHHHHHHHK...",
-  "..KKYYYYYYYYKK..",
-  ".KSKYYYYYYYYKSK.",
-  ".KSKYYYYYYYYKSK.",
-  ".KKKJJJJJJJJKKK.",
-  "...KJJJKKJJJK...",
-  "...KRRRK.KRRRK.."
+"................",
+"....KKKKKKKK....",
+"...KBBBBBBBBK...",
+"..KBBBBBBBBBBK..",
+"..KBBBBBBBBBBK..",
+"..KBBBBBBBBBBK..",
+"..KHHHHHHHHHHK..",
+"..KHHHHHHHHHHK..",
+"..KHHHHHHHHHHK..",
+"...KHHHHHHHHK...",
+"..KKYYYYYYYYKK..",
+".KSKYYYYYYYYKSK.",
+".KSKYYYYYYYYKSK.",
+".KKKJJJJJJJJKKK.",
+"...KJJJKKJJJK...",
+"...KRRRK.KRRRK.."
 };
 
 // Facing left. Facing right is made by flipping this one.
 static const char art_left[16][17] = {
-  "................",
-  "....KKKKKKK.....",
-  "...KBBBBBBBBK...",
-  "..KBBBBBBBBBBK..",
-  ".KBBBBBBBBBBBK..",
-  "KBBBKKKKKKKKK...",
-  ".KKKSSSSSSHHK...",
-  "...KSKSSSSHHK...",
-  "...KSSSSSSHHK...",
-  "....KSSSSSHK....",
-  "...KKYYYYYYKK...",
-  "...KSYYYYYYYK...",
-  "...KSYYYYYYYK...",
-  "...KKJJJJJJKK...",
-  "....KJJJJJJK....",
-  "...KRRRJJKRRK..."
+"................",
+"....KKKKKKK.....",
+"...KBBBBBBBBK...",
+"..KBBBBBBBBBBK..",
+".KBBBBBBBBBBBK..",
+"KBBBKKKKKKKKK...",
+".KKKSSSSSSHHK...",
+"...KSKSSSSHHK...",
+"...KSSSSSSHHK...",
+"....KSSSSSHK....",
+"...KKYYYYYYKK...",
+"...KSYYYYYYYK...",
+"...KSYYYYYYYK...",
+"...KKJJJJJJKK...",
+"....KJJJJJJK....",
+"...KRRRJJKRRK..."
 };
 
 // A tree (the '.' parts show the grass behind it).
 //   K outline   L leaf   D dark leaf   R trunk
 static const char art_tree[16][17] = {
-  "................",
-  ".....KKKKKK.....",
-  "...KKKLLLLKKK...",
-  "..KLLLLLLLLLLK..",
-  ".KLLLLDLLLLLLLK.",
-  ".KLLLDLLLLDLLLK.",
-  "KLLLLLLLLLLLLLLK",
-  "KLLDLLLLLLLDLLLK",
-  "KLLLLDLLLLLLLLLK",
-  ".KLLLLLLLLLLLLK.",
-  "..KKLLLLLLLLKK..",
-  "....KKKRRKKK....",
-  "......KRRK......",
-  "......KRRK......",
-  ".....KKRRKK.....",
-  "................"
+"................",
+".....KKKKKK.....",
+"...KKKLLLLKKK...",
+"..KLLLLLLLLLLK..",
+".KLLLLDLLLLLLLK.",
+".KLLLDLLLLDLLLK.",
+"KLLLLLLLLLLLLLLK",
+"KLLDLLLLLLLDLLLK",
+"KLLLLDLLLLLLLLLK",
+".KLLLLLLLLLLLLK.",
+"..KKLLLLLLLLKK..",
+"....KKKRRKKK....",
+"......KRRK......",
+"......KRRK......",
+".....KKRRKK.....",
+"................"
+};
+
+// Little 5x7 letters for the shop signs. X = painted pixel.
+static const char glyph_p[7][6] = {
+"XXXX.",
+"X...X",
+"X...X",
+"XXXX.",
+"X....",
+"X....",
+"X...."
+};
+
+static const char glyph_m[7][6] = {
+"X...X",
+"XX.XX",
+"X.X.X",
+"X...X",
+"X...X",
+"X...X",
+"X...X"
 };
 
 // ---------- Memory for ready-made pictures ----------
 // We build each picture once at the start, then just copy from these
-// boxes while the game runs (fast!).
-static unsigned short tile_gfx[4][TILE * TILE];
+// boxes while the game runs (fast!). 16 tiles * 512 bytes = 8 KB.
+static unsigned short tile_gfx[NUM_TILES][TILE * TILE];
 
 // Two frames for each of the four directions.
 static unsigned short sprite_gfx[4][2][TILE * TILE];
@@ -166,6 +208,7 @@ static unsigned short sprite_gfx[4][2][TILE * TILE];
 static unsigned char map_kind[MAP_H][MAP_W];
 static int walk_frame = 0;
 static int walk_timer = 0;
+
 // Turn a letter from the pixel art into a color.
 static unsigned short letter_color(char c) {
   switch (c) {
@@ -188,14 +231,98 @@ static void build_map(void) {
   int tx, ty;
   for (ty = 0; ty < MAP_H; ty++) {
     for (tx = 0; tx < MAP_W; tx++) {
+      int kind;
       switch (map_rows[ty][tx]) {
-        case 'P': map_kind[ty][tx] = T_PATH;   break;
-        case 'F': map_kind[ty][tx] = T_FLOWER; break;
-        case 'T': map_kind[ty][tx] = T_TREE;   break;
-        default:  map_kind[ty][tx] = T_GRASS;  break;
+        case 'P': kind = T_PATH;    break;
+        case 'F': kind = T_FLOWER;  break;
+        case 'T': kind = T_TREE;    break;
+        case 'H': kind = T_ROOF_H1; break;
+        case 'J': kind = T_ROOF_H2; break;
+        case 'h': kind = T_WALL_H;  break;
+        case 'D': kind = T_DOOR_H;  break;
+        case 'R': kind = T_ROOF_C;  break;
+        case 'r': kind = T_SIGN_C;  break;
+        case 'C': kind = T_WALL_C;  break;
+        case 'c': kind = T_DOOR_C;  break;
+        case 'U': kind = T_ROOF_M;  break;
+        case 'u': kind = T_SIGN_M;  break;
+        case 'M': kind = T_WALL_M;  break;
+        case 'm': kind = T_DOOR_M;  break;
+        default:  kind = T_GRASS;   break;
       }
+      map_kind[ty][tx] = (unsigned char)kind;
     }
   }
+}
+
+// Fill a rectangle inside one tile (x1/y1 are NOT included).
+static void tile_box(unsigned short* t, int x0, int y0, int x1, int y1,
+                     unsigned short c) {
+  int x, y;
+  for (y = y0; y < y1; y++)
+    for (x = x0; x < x1; x++)
+      t[y * TILE + x] = c;
+}
+
+// A roof tile: staggered shingles with a dark outline on top and bottom.
+static void make_roof(unsigned short* t, unsigned short base,
+                      unsigned short light, unsigned short dark) {
+  int x, y;
+  for (y = 0; y < TILE; y++) {
+    for (x = 0; x < TILE; x++) {
+      unsigned short c = base;
+      if ((y & 3) == 3)      c = dark;
+      else if ((y & 3) == 0) c = light;
+      if ((y & 3) != 3 && (((x + ((y >> 2) & 1) * 4) & 7) == 7)) c = dark;
+      if (y == 0 || y == TILE - 1) c = OUTLINE;
+      t[y * TILE + x] = c;
+    }
+  }
+}
+
+// A white sign plaque with a big letter, painted on top of a roof tile.
+static void add_sign(unsigned short* t, const char glyph[7][6],
+                     unsigned short color) {
+  int gx, gy;
+  tile_box(t, 2, 2, 14, 14, OUTLINE);
+  tile_box(t, 3, 3, 13, 13, WHITE);
+  for (gy = 0; gy < 7; gy++)
+    for (gx = 0; gx < 5; gx++)
+      if (glyph[gy][gx] == 'X')
+        t[(5 + gy) * TILE + (6 + gx)] = color;
+}
+
+// A wall tile: plain siding with a darker strip along the bottom.
+static void make_wall(unsigned short* t, unsigned short wall,
+                      unsigned short shade) {
+  int x, y;
+  for (y = 0; y < TILE; y++) {
+    for (x = 0; x < TILE; x++) {
+      unsigned short c = wall;
+      if ((y & 3) == 3) c = shade;
+      if (y >= 14)      c = shade;
+      t[y * TILE + x] = c;
+    }
+  }
+}
+
+// A window with a cross-shaped frame.
+static void add_window(unsigned short* t, unsigned short frame) {
+  unsigned short glass = RGB15(14, 24, 31);
+  tile_box(t, 3, 2, 13, 12, frame);
+  tile_box(t, 4, 3, 12, 11, glass);
+  tile_box(t, 7, 3, 9, 11, frame);
+  tile_box(t, 4, 6, 12, 8, frame);
+  t[4 * TILE + 5] = WHITE;     // little shine in the top-left pane
+  t[4 * TILE + 10] = WHITE;
+}
+
+// A door with a frame and a golden knob.
+static void add_door(unsigned short* t, unsigned short door,
+                     unsigned short frame) {
+  tile_box(t, 2, 1, 14, TILE, frame);
+  tile_box(t, 3, 2, 13, TILE, door);
+  tile_box(t, 10, 9, 12, 11, RGB15(31, 27, 5));
 }
 
 static void build_tiles(void) {
@@ -216,18 +343,14 @@ static void build_tiles(void) {
       int pattern = (x * 7 + y * 11 + x * y * 3) & 15;
 
       tile_gfx[T_GRASS][i] = grass;
-
       if (pattern == 0 || pattern == 5)
         tile_gfx[T_GRASS][i] = grass_dark;
-
       if (pattern == 10 && (y & 1))
         tile_gfx[T_GRASS][i] = grass_light;
 
       tile_gfx[T_PATH][i] = dirt;
-
       if (pattern == 2 || pattern == 11)
         tile_gfx[T_PATH][i] = dirt_dark;
-
       if (pattern == 7 && (x & 1))
         tile_gfx[T_PATH][i] = dirt_light;
 
@@ -258,63 +381,91 @@ static void build_tiles(void) {
     for (x = 0; x < TILE; x++) {
       int i = y * TILE + x;
       unsigned short c = letter_color(art_tree[y][x]);
-
-      tile_gfx[T_TREE][i] =
-          (c == CLEAR) ? tile_gfx[T_GRASS][i] : c;
+      tile_gfx[T_TREE][i] = (c == CLEAR) ? tile_gfx[T_GRASS][i] : c;
     }
   }
+
+  // ----- Houses: cream walls, brown doors, orange and purple roofs -----
+  make_roof(tile_gfx[T_ROOF_H1], RGB15(24, 10, 6), RGB15(28, 14, 9),
+            RGB15(16, 6, 4));
+  make_roof(tile_gfx[T_ROOF_H2], RGB15(18, 10, 22), RGB15(22, 14, 26),
+            RGB15(12, 6, 15));
+
+  make_wall(tile_gfx[T_WALL_H], RGB15(30, 26, 18), RGB15(25, 21, 13));
+  add_window(tile_gfx[T_WALL_H], RGB15(10, 6, 3));
+
+  make_wall(tile_gfx[T_DOOR_H], RGB15(30, 26, 18), RGB15(25, 21, 13));
+  add_door(tile_gfx[T_DOOR_H], RGB15(17, 10, 4), RGB15(9, 5, 2));
+
+  // ----- Pokemon Center: red roof, "P" sign, pink-white walls -----
+  make_roof(tile_gfx[T_ROOF_C], RGB15(29, 5, 5), RGB15(31, 10, 9),
+            RGB15(20, 2, 3));
+  make_roof(tile_gfx[T_SIGN_C], RGB15(29, 5, 5), RGB15(31, 10, 9),
+            RGB15(20, 2, 3));
+  add_sign(tile_gfx[T_SIGN_C], glyph_p, RGB15(29, 3, 3));
+
+  make_wall(tile_gfx[T_WALL_C], RGB15(31, 27, 26), RGB15(27, 22, 22));
+  add_window(tile_gfx[T_WALL_C], RGB15(12, 12, 14));
+
+  make_wall(tile_gfx[T_DOOR_C], RGB15(31, 27, 26), RGB15(27, 22, 22));
+  add_door(tile_gfx[T_DOOR_C], RGB15(18, 26, 30), RGB15(12, 12, 14));
+  tile_box(tile_gfx[T_DOOR_C], 7, 2, 9, TILE, RGB15(12, 12, 14)); // sliding doors
+
+  // ----- Poke Mart: blue roof, "M" sign, light blue-grey walls -----
+  make_roof(tile_gfx[T_ROOF_M], RGB15(4, 10, 26), RGB15(8, 15, 30),
+            RGB15(2, 5, 16));
+  make_roof(tile_gfx[T_SIGN_M], RGB15(4, 10, 26), RGB15(8, 15, 30),
+            RGB15(2, 5, 16));
+  add_sign(tile_gfx[T_SIGN_M], glyph_m, RGB15(4, 10, 26));
+
+  make_wall(tile_gfx[T_WALL_M], RGB15(24, 28, 31), RGB15(19, 23, 28));
+  add_window(tile_gfx[T_WALL_M], RGB15(4, 6, 14));
+
+  make_wall(tile_gfx[T_DOOR_M], RGB15(24, 28, 31), RGB15(19, 23, 28));
+  add_door(tile_gfx[T_DOOR_M], RGB15(10, 18, 28), RGB15(4, 6, 14));
+  tile_box(tile_gfx[T_DOOR_M], 7, 2, 9, TILE, RGB15(4, 6, 14));
 }
 
 static void build_sprites(void) {
-int x, y;
-int dir;
+  int x, y;
+  int dir;
 
-for (y = 0; y < TILE; y++) {
-for (x = 0; x < TILE; x++) {
-int i = y * TILE + x;
+  for (y = 0; y < TILE; y++) {
+    for (x = 0; x < TILE; x++) {
+      int i = y * TILE + x;
 
-  sprite_gfx[DIR_DOWN][0][i] =
-      letter_color(art_down[y][x]);
-
-  sprite_gfx[DIR_UP][0][i] =
-      letter_color(art_up[y][x]);
-
-  sprite_gfx[DIR_LEFT][0][i] =
-      letter_color(art_left[y][x]);
-
-  sprite_gfx[DIR_RIGHT][0][i] =
-      letter_color(art_left[y][TILE - 1 - x]);
-}
-
-}
-
-// Create the second walking frame.
-for (dir = 0; dir < 4; dir++) {
-for (y = 0; y < TILE; y++) {
-for (x = 0; x < TILE; x++) {
-int i = y * TILE + x;
-int source_x = x;
-
-    // Move the two feet apart slightly in the
-    // alternate frame.
-    if (y >= 14) {
-      if (x < 8)
-        source_x = x + 1;
-      else
-        source_x = x - 1;
+      sprite_gfx[DIR_DOWN][0][i]  = letter_color(art_down[y][x]);
+      sprite_gfx[DIR_UP][0][i]    = letter_color(art_up[y][x]);
+      sprite_gfx[DIR_LEFT][0][i]  = letter_color(art_left[y][x]);
+      sprite_gfx[DIR_RIGHT][0][i] = letter_color(art_left[y][TILE - 1 - x]);
     }
+  }
 
-    if (source_x >= 0 && source_x < TILE) {
-      sprite_gfx[dir][1][i] =
-          sprite_gfx[dir][0][y * TILE + source_x];
-    } else {
-      sprite_gfx[dir][1][i] = CLEAR;
+  // Create the second walking frame.
+  for (dir = 0; dir < 4; dir++) {
+    for (y = 0; y < TILE; y++) {
+      for (x = 0; x < TILE; x++) {
+        int i = y * TILE + x;
+        int source_x = x;
+
+        // Move the two feet apart slightly in the alternate frame.
+        if (y >= 14) {
+          if (x < 8)
+            source_x = x + 1;
+          else
+            source_x = x - 1;
+        }
+
+        if (source_x >= 0 && source_x < TILE) {
+          sprite_gfx[dir][1][i] = sprite_gfx[dir][0][y * TILE + source_x];
+        } else {
+          sprite_gfx[dir][1][i] = CLEAR;
+        }
+      }
     }
   }
 }
 
-}
-}
 // ---------- Drawing ----------
 // Paint a rectangle of the screen: left/top are included, right/bottom are not.
 // For EVERY pixel we first work out the final color (map, with the trainer
@@ -353,15 +504,16 @@ static void paint_box(int left, int top, int right, int bottom,
 }
 
 // ---------- Walking rules ----------
-// Is the pixel (px, py) blocked? Trees and the screen edge block you.
+// Is the pixel (px, py) blocked? Trees, buildings (every tile from T_TREE
+// onwards) and the screen edge block you.
 static int is_blocked(int px, int py) {
   if (px < 0 || py < 0 || px >= SCREEN_W || py >= SCREEN_H) return 1;
-  return map_kind[py >> 4][px >> 4] == T_TREE;
+  return map_kind[py >> 4][px >> 4] >= T_TREE;
 }
 
 // Can the trainer stand with its top-left corner at (px, py)?
 // The body box is smaller than a tile, so checking its 4 corners is enough
-// to know whether it touches a tree.
+// to know whether it touches anything solid.
 static int can_stand(int px, int py) {
   return !is_blocked(px + HB_LEFT,  py + HB_TOP) &&
          !is_blocked(px + HB_RIGHT, py + HB_TOP) &&
@@ -402,7 +554,7 @@ static void lamp(int slot, int on, unsigned short color) {
 // Lamp 0 blinks      = the game loop is running
 // Lamps 1-4 light up = the GBA sees LEFT / RIGHT / UP / DOWN pressed
 // Lamp 5 lights up   = the trainer moved this frame
-// Lamp 6 lights up   = a direction is pressed but a tree/edge blocked it
+// Lamp 6 lights up   = a direction is pressed but something solid blocked it
 static void show_lamps(unsigned int frame, unsigned short keys,
                        int moved, int blocked) {
   lamp(0, (frame >> 5) & 1, RGB15(31, 0, 31));
@@ -450,8 +602,8 @@ int main(void) {
   while (1) {
     unsigned short keys;
     int old_x = x, old_y = y, old_dir = dir;
-int old_walk_frame = walk_frame;
-int dx = 0, dy = 0;
+    int old_walk_frame = walk_frame;
+    int dx = 0, dy = 0;
     wait_vblank();
     frame++;
 
@@ -463,45 +615,4 @@ int dx = 0, dy = 0;
     if (keys & KEY_DOWN)  { dy =  1; dir = DIR_DOWN;  }
 
     // Move one pixel at a time so we stop exactly at a wall.
-    // Left/right and up/down are checked separately so you slide along walls.
-    for (n = 0; n < SPEED; n++) {
-      if (dx != 0 && can_stand(x + dx, y)) x += dx;
-      if (dy != 0 && can_stand(x, y + dy)) y += dy;
-    }
-
-    // Only repaint if something changed. We repaint one box that covers both
-    // the old and the new trainer position (at most 18x18 pixels).
-    {
-int moved = (x != old_x || y != old_y);
-
-if (moved) {
-walk_timer++;
-
-if (walk_timer >= 6) {
-  walk_timer = 0;
-  walk_frame = 1 - walk_frame;
-}
-
-} else {
-walk_timer = 0;
-walk_frame = 0;
-}
-
-if (moved || dir != old_dir || walk_frame != old_walk_frame) {
-int left   = (x < old_x) ? x : old_x;
-int top    = (y < old_y) ? y : old_y;
-int right  = ((x > old_x) ? x : old_x) + TILE;
-int bottom = ((y > old_y) ? y : old_y) + TILE;
-
-paint_box(left, top, right, bottom, x, y, dir);
-
-}
-}
-
-#if DEBUG_HUD
-    show_lamps(frame, keys,
-               (x != old_x || y != old_y),
-               ((dx != 0 || dy != 0) && x == old_x && y == old_y));
-#endif
-  }
-}
+    // Left/r
