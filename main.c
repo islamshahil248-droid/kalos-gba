@@ -19,6 +19,11 @@
 #define KEY_UP    0x0040
 #define KEY_DOWN  0x0080
 
+// ---------- Test lamps ----------
+// 1 = show 7 little test lamps in the top-left corner (they help us find
+// problems). Change it to 0 when everything works to hide them.
+#define DEBUG_HUD 1
+
 // ---------- Sizes ----------
 #define SCREEN_W 240
 #define SCREEN_H 160
@@ -318,6 +323,33 @@ static void pick_start(int* out_x, int* out_y) {
   }
 }
 
+#if DEBUG_HUD
+// Draw one 6x6 lamp in the top-left corner (inside the top row of trees,
+// where the trainer can never walk, so nothing ever paints over it).
+static void lamp(int slot, int on, unsigned short color) {
+  int lx = 2 + slot * 8;
+  int x, y;
+  for (y = 2; y < 8; y++)
+    for (x = lx; x < lx + 6; x++)
+      VRAM[y * SCREEN_W + x] = on ? color : RGB15(4, 4, 4);
+}
+
+// Lamp 0 blinks      = the game loop is running
+// Lamps 1-4 light up = the GBA sees LEFT / RIGHT / UP / DOWN pressed
+// Lamp 5 lights up   = the trainer moved this frame
+// Lamp 6 lights up   = a direction is pressed but a tree/edge blocked it
+static void show_lamps(unsigned int frame, unsigned short keys,
+                       int moved, int blocked) {
+  lamp(0, (frame >> 5) & 1, RGB15(31, 0, 31));
+  lamp(1, keys & KEY_LEFT,  RGB15(0, 31, 31));
+  lamp(2, keys & KEY_RIGHT, RGB15(0, 31, 31));
+  lamp(3, keys & KEY_UP,    RGB15(0, 31, 31));
+  lamp(4, keys & KEY_DOWN,  RGB15(0, 31, 31));
+  lamp(5, moved,            RGB15(31, 31, 31));
+  lamp(6, blocked,          RGB15(31, 0, 0));
+}
+#endif
+
 // Wait until the screen has finished drawing a frame, so we change the
 // picture while the GBA is "between frames". This stops tearing.
 static void wait_vblank(void) {
@@ -330,6 +362,7 @@ int main(void) {
   int x, y;
   int dir = DIR_UP;    // which way the trainer faces
   int n;
+  unsigned int frame = 0;
 
   // Forced blank: the screen stays blank while we paint the first picture,
   // so you never see it being built.
@@ -345,12 +378,17 @@ int main(void) {
 
   REG_DISPCNT = 0x0403;   // Mode 3 (simple bitmap screen) + show it
 
+#if DEBUG_HUD
+  lamp(0, 1, RGB15(0, 31, 0));   // GREEN = setup finished, about to start the loop
+#endif
+
   while (1) {
     unsigned short keys;
     int old_x = x, old_y = y, old_dir = dir;
     int dx = 0, dy = 0;
 
     wait_vblank();
+    frame++;
 
     keys = ~REG_KEYINPUT;   // flip so that 1 = pressed
 
@@ -375,5 +413,11 @@ int main(void) {
       int bottom = ((y > old_y) ? y : old_y) + TILE;
       paint_box(left, top, right, bottom, x, y, dir);
     }
+
+#if DEBUG_HUD
+    show_lamps(frame, keys,
+               (x != old_x || y != old_y),
+               ((dx != 0 || dy != 0) && x == old_x && y == old_y));
+#endif
   }
 }
