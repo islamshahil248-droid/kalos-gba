@@ -195,43 +195,68 @@ static void build_map(void) {
 }
 
 static void build_tiles(void) {
-  unsigned short grass      = RGB15(9, 22, 8);
-  unsigned short grass_dark = RGB15(6, 17, 6);
-  unsigned short dirt       = RGB15(26, 22, 14);
-  unsigned short dirt_dark  = RGB15(21, 17, 10);
+  unsigned short grass       = RGB15(10, 24, 8);
+  unsigned short grass_light = RGB15(13, 27, 10);
+  unsigned short grass_dark  = RGB15(6, 18, 5);
+
+  unsigned short dirt        = RGB15(26, 21, 12);
+  unsigned short dirt_light  = RGB15(29, 24, 15);
+  unsigned short dirt_dark   = RGB15(20, 15, 8);
+
   int x, y;
 
+  // Grass and dirt patterns.
   for (y = 0; y < TILE; y++) {
     for (x = 0; x < TILE; x++) {
       int i = y * TILE + x;
-      // A little scrambled pattern so it doesn't look flat
-      int scatter = (x * 37 + y * 91 + x * y * 7) & 15;
+      int pattern = (x * 7 + y * 11 + x * y * 3) & 15;
 
-      // grass: mostly green with a few darker dots
-      tile_gfx[T_GRASS][i] = (scatter == 0) ? grass_dark : grass;
+      tile_gfx[T_GRASS][i] = grass;
 
-      // path: tan with a few darker pebbles
-      tile_gfx[T_PATH][i] = (scatter == 3 || scatter == 9) ? dirt_dark : dirt;
+      if (pattern == 0 || pattern == 5)
+        tile_gfx[T_GRASS][i] = grass_dark;
 
-      // flowers: grass with three little flowers
+      if (pattern == 10 && (y & 1))
+        tile_gfx[T_GRASS][i] = grass_light;
+
+      tile_gfx[T_PATH][i] = dirt;
+
+      if (pattern == 2 || pattern == 11)
+        tile_gfx[T_PATH][i] = dirt_dark;
+
+      if (pattern == 7 && (x & 1))
+        tile_gfx[T_PATH][i] = dirt_light;
+
       tile_gfx[T_FLOWER][i] = tile_gfx[T_GRASS][i];
     }
   }
 
-  // Flowers: pink, white and yellow dots
-  tile_gfx[T_FLOWER][4 * TILE + 4]   = RGB15(31, 12, 20);
-  tile_gfx[T_FLOWER][5 * TILE + 4]   = RGB15(31, 12, 20);
-  tile_gfx[T_FLOWER][10 * TILE + 11] = RGB15(31, 31, 31);
-  tile_gfx[T_FLOWER][11 * TILE + 11] = RGB15(31, 31, 31);
-  tile_gfx[T_FLOWER][11 * TILE + 5]  = RGB15(31, 28, 6);
-  tile_gfx[T_FLOWER][12 * TILE + 5]  = RGB15(31, 28, 6);
+  // Pink flower.
+  tile_gfx[T_FLOWER][4 * TILE + 4] = RGB15(31, 10, 22);
+  tile_gfx[T_FLOWER][4 * TILE + 5] = RGB15(31, 10, 22);
+  tile_gfx[T_FLOWER][5 * TILE + 4] = RGB15(31, 10, 22);
+  tile_gfx[T_FLOWER][5 * TILE + 5] = RGB15(31, 27, 5);
 
-  // Tree: draw the art on top of grass
+  // White flower.
+  tile_gfx[T_FLOWER][9 * TILE + 10] = RGB15(31, 31, 31);
+  tile_gfx[T_FLOWER][9 * TILE + 11] = RGB15(31, 31, 31);
+  tile_gfx[T_FLOWER][10 * TILE + 10] = RGB15(31, 31, 31);
+  tile_gfx[T_FLOWER][10 * TILE + 11] = RGB15(31, 27, 5);
+
+  // Yellow flower.
+  tile_gfx[T_FLOWER][12 * TILE + 5] = RGB15(31, 27, 5);
+  tile_gfx[T_FLOWER][12 * TILE + 6] = RGB15(31, 27, 5);
+  tile_gfx[T_FLOWER][13 * TILE + 5] = RGB15(31, 27, 5);
+  tile_gfx[T_FLOWER][13 * TILE + 6] = RGB15(31, 27, 5);
+
+  // Draw the existing tree art over the grass.
   for (y = 0; y < TILE; y++) {
     for (x = 0; x < TILE; x++) {
+      int i = y * TILE + x;
       unsigned short c = letter_color(art_tree[y][x]);
-      tile_gfx[T_TREE][y * TILE + x] =
-          (c == CLEAR) ? tile_gfx[T_GRASS][y * TILE + x] : c;
+
+      tile_gfx[T_TREE][i] =
+          (c == CLEAR) ? tile_gfx[T_GRASS][i] : c;
     }
   }
 }
