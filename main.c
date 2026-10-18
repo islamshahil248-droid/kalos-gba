@@ -385,16 +385,6 @@ static void add_window(unsigned short* t, unsigned short frame) {
 static void add_door(unsigned short* t, unsigned short door,
                      unsigned short frame) {
   tile_box(t, 2, 1, 14, TILE, frame);
-  tile_box(t, 4, 3, 12, 11, RGB15(14, 24, 31));
-  tile_box(t, 7, 3, 9, 11, frame);
-  tile_box(t, 4, 6, 12, 8, frame);
-  t[4 * TILE + 5] = WHITE;
-  t[4 * TILE + 10] = WHITE;
-}
-
-static void add_door(unsigned short* t, unsigned short door,
-                     unsigned short frame) {
-  tile_box(t, 2, 1, 14, TILE, frame);
   tile_box(t, 3, 2, 13, TILE, door);
   tile_box(t, 10, 9, 12, 11, RGB15(31, 27, 5));
 }
@@ -446,7 +436,7 @@ static void make_shelf(unsigned short* t, const unsigned short* c) {
 // Bookshelf: two rows of colored books
 static void make_books(unsigned short* t, int off) {
   static const unsigned short bc[4] = {
-    RGB15(27, 5, 7), RGB15(6, 15, 29), RGB15(31, 27, 5), RGB15(4, 22, 10)
+   RGB15(27, 5, 7), RGB15(6, 15, 29), RGB15(31, 27, 5), RGB15(4, 22, 10)
   };
   int i, r;
   tile_box(t, 0, 0, TILE, TILE, RGB15(14, 8, 4));
