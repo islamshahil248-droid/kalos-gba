@@ -1,5 +1,4 @@
-// GBA town game: Mode 3, 240x160, devkitARM, no libraries.
-// Town + enterable Pokemon Center (A button at the door).
+// GBA town with 4 enterable buildings. Mode 3, 240x160, devkitARM, no libraries.
 #define REG_DISPCNT  (*(volatile unsigned short*)0x04000000)
 #define REG_VCOUNT   (*(volatile unsigned short*)0x04000006)
 #define REG_KEYINPUT (*(volatile unsigned short*)0x04000130)
@@ -19,12 +18,8 @@
 #define MAP_W    15
 #define MAP_H    10
 #define SPEED    2
-#define START_TX 6          // where you start in town (a path tile)
+#define START_TX 6    // where the trainer starts in town
 #define START_TY 8
-#define TOWN_EXIT_TX   7    // where you appear in town after leaving the Center
-#define TOWN_EXIT_TY   3    // (the path square right below its door)
-#define INSIDE_START_TX 7   // where you appear inside the Center
-#define INSIDE_START_TY 8   // (on the door mat)
 #define HB_LEFT   2   // trainer body box inside the 16x16 sprite
 #define HB_RIGHT  13
 #define HB_TOP    1
@@ -38,26 +33,46 @@
 #define DIR_LEFT  2
 #define DIR_RIGHT 3
 
-// Tile kinds. Everything from T_TREE onwards is SOLID, so new walkable
-// tiles must be listed BEFORE T_TREE.
-enum {
-  T_GRASS, T_PATH, T_FLOWER,
-  T_FLOOR1, T_FLOOR2, T_MAT,            // inside the Center: walkable
-  T_TREE,
-  T_ROOF_H1, T_ROOF_H2, T_WALL_H, T_DOOR_H,
-  T_ROOF_C, T_SIGN_C, T_WALL_C, T_DOOR_C,
-  T_ROOF_M, T_SIGN_M, T_WALL_M, T_DOOR_M,
-  // inside the Center (solid):
-  T_I_WALL, T_I_WALL_BOT, T_I_SIDE_L, T_I_SIDE_R, T_I_BANNER,
-  T_COUNTER_L, T_COUNTER_M, T_COUNTER_R,
-  T_MACH_TL, T_MACH_TR, T_MACH_BL, T_MACH_BR,   // must stay in this order
-  T_PLANT, T_EXIT_DOOR,
-  NUM_TILES
-};
+// Rooms. Each room has its OWN tile numbers (0 = first tile of that room)
+// and only the current room's pictures are kept in memory.
+enum { R_TOWN, R_CENTER, R_MART, R_HOUSE1, R_HOUSE2, NUM_ROOMS };
 
-// TOWN MAP. G grass, P path, F flowers, T tree (solid)
-// House: H/J roof, h wall, D door. Center: R roof, r sign, C wall, c door.
-// Mart: U roof, u sign, M wall, m door.  Keep the top row all trees.
+// Town tiles (3 and up are SOLID). MAX_TILES = biggest tile set of any room.
+enum {
+  TW_GRASS, TW_PATH, TW_FLOWER, TW_TREE,
+  TW_ROOF_H1, TW_ROOF_H2, TW_WALL_H, TW_DOOR_H,
+  TW_ROOF_C, TW_SIGN_C, TW_WALL_C, TW_DOOR_C,
+  TW_ROOF_M, TW_SIGN_M, TW_WALL_M, TW_DOOR_M,
+  MAX_TILES
+};
+// Inside tiles: 0,1 = checker floor, 2 = rug/mat (walkable); 3 and up SOLID.
+enum { IC_FA, IC_FB, IC_MAT, IC_WALL, IC_SIGN, IC_CNT, IC_CNTF, IC_MCH_T,
+       IC_MCH_B, IC_PLANT, IC_DOOR };
+enum { IM_FA, IM_FB, IM_MAT, IM_WALL, IM_SIGN, IM_DOOR, IM_CNT, IM_CNTF,
+       IM_SHELF_A, IM_SHELF_B, IM_NPC, IM_PLANT };
+enum { H1_FA, H1_FB, H1_RUG, H1_WALL, H1_WIN, H1_DOOR, H1_BED_H, H1_BED_F,
+       H1_TABLE, H1_CHAIR, H1_PLANT, H1_NPC };
+enum { H2_FA, H2_FB, H2_RUG, H2_WALL, H2_WIN, H2_DOOR, H2_SHELF_A, H2_SHELF_B,
+       H2_BED_H, H2_BED_F, H2_TABLE, H2_CHAIR, H2_PLANT, H2_NPC };
+#define SOLID_INSIDE 3
+
+typedef struct {
+  const char (*rows)[MAP_W + 1];     // the map letters
+  const char* keys;                  // letters we know ...
+  const unsigned char* kinds;        // ... and the tile each one means
+  unsigned char solid_from;          // tile numbers >= this block you
+  unsigned char checker;             // 1: '.' alternates tile 0 / tile 1
+  void (*build)(void);               // paints this room's tile pictures
+} Room;
+
+typedef struct {                     // one door: where it is, where it leads
+  unsigned char from, tx, ty;        // room and tile of the door
+  unsigned char to, sx, sy, sdir;    // room, tile and facing after using it
+} Door;
+
+// ---------- Town ----------
+// G grass, P path, F flowers, T tree. House: H/J roof, h wall, D door.
+// Center: R roof, r sign, C wall, c door. Mart: U roof, u sign, M wall, m door.
 static const char town_rows[MAP_H][MAP_W + 1] = {
 "TTTTTTTTTTTTTTT",
 "THHHGGRrRGGUuUT",
@@ -70,25 +85,109 @@ static const char town_rows[MAP_H][MAP_W + 1] = {
 "TGGGFGPGGGGGFGT",
 "TTTTTTPTTTTTTTT"
 };
-
-// POKEMON CENTER INSIDE. f floor, m door mat, E exit door,
-// W/V/L/R walls (top/bottom/left/right), S wall sign,
-// a b c counter (left/middle/right), M N / O P healing machine
-// (top-left, top-right / bottom-left, bottom-right), p plant.
-// Keep the border all walls and E in the bottom row.
-static const char inside_rows[MAP_H][MAP_W + 1] = {
-"WWWWWWWWWWWWWWW",
-"WWWWWWWSWWWWMNW",
-"LfffffffffffOPR",
-"LfffffffffffffR",
-"LfffabbbbbcfffR",
-"LfffffffffffffR",
-"LpfffffffffffpR",
-"LfffffffffffffR",
-"LfffffmmmfffffR",
-"VVVVVVVEVVVVVVV"
+static const char town_keys[] = "GPFTHJhDRrCcUuMm";
+static const unsigned char town_kinds[] = {
+  TW_GRASS, TW_PATH, TW_FLOWER, TW_TREE, TW_ROOF_H1, TW_ROOF_H2, TW_WALL_H,
+  TW_DOOR_H, TW_ROOF_C, TW_SIGN_C, TW_WALL_C, TW_DOOR_C, TW_ROOF_M,
+  TW_SIGN_M, TW_WALL_M, TW_DOOR_M
 };
 
+// ---------- Interiors ----------
+// Common: . floor, W wall, S wall+sign, w wall+window, c exit door, _ rug/mat,
+// p plant, n NPC. Row 0 and the side walls are always solid (HUD lamps there).
+// Objects drawn on the floor (p, n, h) must sit where (column+row) is EVEN.
+
+// Pokemon Center: K/k counter top/front, M/N healing machine top/bottom.
+static const char center_rows[MAP_H][MAP_W + 1] = {
+"WWWWWWWSWWWWWWW",
+"Wp.........MM.W",
+"W..........NN.W",
+"W..KKKKKKK....W",
+"W..kkkkkkk....W",
+"W.............W",
+"W...........p.W",
+"W.............W",
+"W.....___.....W",
+"WWWWWWWcWWWWWWW"
+};
+static const char center_keys[] = ".pWSKkMN_c";
+static const unsigned char center_kinds[] = {
+  IC_FA, IC_PLANT, IC_WALL, IC_SIGN, IC_CNT, IC_CNTF, IC_MCH_T, IC_MCH_B,
+  IC_MAT, IC_DOOR
+};
+
+// Poke Mart: a/b shelves, K/k counter, shopkeeper n behind the counter.
+static const char mart_rows[MAP_H][MAP_W + 1] = {
+"WWWWWWWSWWWWWWW",
+"Wabab.....babaW",
+"Wabab.n...babaW",
+"W....KKKKK....W",
+"W....kkkkk....W",
+"W.............W",
+"W..aa.....bb..W",
+"Wp...........pW",
+"W.....___.....W",
+"WWWWWWWcWWWWWWW"
+};
+static const char mart_keys[] = ".pWSKkabn_c";
+static const unsigned char mart_kinds[] = {
+  IM_FA, IM_PLANT, IM_WALL, IM_SIGN, IM_CNT, IM_CNTF, IM_SHELF_A, IM_SHELF_B,
+  IM_NPC, IM_MAT, IM_DOOR
+};
+
+// House 1: B/b bed head/foot, T table, h chair, n mother.
+static const char house1_rows[MAP_H][MAP_W + 1] = {
+"WWWwWWWWWWWwWWW",
+"WB...........pW",
+"Wb............W",
+"W......h...n..W",
+"W.....TTh.....W",
+"W......h......W",
+"W.............W",
+"W............pW",
+"W.....___.....W",
+"WWWWWWWcWWWWWWW"
+};
+static const char house1_keys[] = ".WwcBbThpn_";
+static const unsigned char house1_kinds[] = {
+  H1_FA, H1_WALL, H1_WIN, H1_DOOR, H1_BED_H, H1_BED_F, H1_TABLE, H1_CHAIR,
+  H1_PLANT, H1_NPC, H1_RUG
+};
+
+// House 2: k/l bookshelves, B/b bed, T table, h chair, n grandfather.
+static const char house2_rows[MAP_H][MAP_W + 1] = {
+"WWWWWwWWWwWWWWW",
+"Wklk.........BW",
+"Wlkl........pbW",
+"W.............W",
+"W.....hTT.....W",
+"W......h......W",
+"W.........n...W",
+"W............pW",
+"W.___.........W",
+"WWWcWWWWWWWWWWW"
+};
+static const char house2_keys[] = ".WwcklBbThpn_";
+static const unsigned char house2_kinds[] = {
+  H2_FA, H2_WALL, H2_WIN, H2_DOOR, H2_SHELF_A, H2_SHELF_B, H2_BED_H, H2_BED_F,
+  H2_TABLE, H2_CHAIR, H2_PLANT, H2_NPC, H2_RUG
+};
+
+// ---------- Doors ----------
+// Entering lands on the mat just inside; leaving lands just below the door.
+static const Door doors[] = {
+  { R_TOWN,   7, 2, R_CENTER, 7, 8, DIR_UP   },
+  { R_CENTER, 7, 9, R_TOWN,   7, 3, DIR_DOWN },
+  { R_TOWN,  12, 2, R_MART,   7, 8, DIR_UP   },
+  { R_MART,   7, 9, R_TOWN,  12, 3, DIR_DOWN },
+  { R_TOWN,   2, 2, R_HOUSE1, 7, 8, DIR_UP   },
+  { R_HOUSE1, 7, 9, R_TOWN,   2, 3, DIR_DOWN },
+  { R_TOWN,  10, 6, R_HOUSE2, 3, 8, DIR_UP   },
+  { R_HOUSE2, 3, 9, R_TOWN,  10, 7, DIR_DOWN }
+};
+#define NUM_DOORS ((int)(sizeof(doors) / sizeof(doors[0])))
+
+// ---------- Trainer art ----------
 // Sprite colors: K outline, B cap, S skin, H hair, Y shirt, J jeans, R shoes
 static const char art_down[16][17] = {
 "................",
@@ -168,10 +267,11 @@ static const char art_tree[16][17] = {
 static const char glyph_p[] = "XXXX.X...XX...XXXXX.X....X....X....";
 static const char glyph_m[] = "X...XXX.XXX.X.XX...XX...XX...XX...X";
 
-static unsigned short tile_gfx[NUM_TILES][TILE * TILE];
+// ---------- Memory (about 12 KB in total) ----------
+static unsigned short tile_gfx[MAX_TILES][TILE * TILE];   // current room only
 static unsigned short sprite_gfx[4][2][TILE * TILE];
-static unsigned char map_kind[MAP_H][MAP_W];   // the map you are in right now
-static int inside = 0;                         // 0 = town, 1 = Pokemon Center
+static unsigned char map_kind[NUM_ROOMS][MAP_H][MAP_W];
+static int cur_room = R_TOWN;
 static int walk_frame = 0;
 static int walk_timer = 0;
 
@@ -190,64 +290,7 @@ static unsigned short letter_color(char c) {
   }
 }
 
-// Turn the town letters into tile kinds.
-static int town_kind(char c) {
-  switch (c) {
-    case 'P': return T_PATH;
-    case 'F': return T_FLOWER;
-    case 'T': return T_TREE;
-    case 'H': return T_ROOF_H1;
-    case 'J': return T_ROOF_H2;
-    case 'h': return T_WALL_H;
-    case 'D': return T_DOOR_H;
-    case 'R': return T_ROOF_C;
-    case 'r': return T_SIGN_C;
-    case 'C': return T_WALL_C;
-    case 'c': return T_DOOR_C;
-    case 'U': return T_ROOF_M;
-    case 'u': return T_SIGN_M;
-    case 'M': return T_WALL_M;
-    case 'm': return T_DOOR_M;
-    default:  return T_GRASS;
-  }
-}
-
-// Turn the Pokemon Center letters into tile kinds.
-// (tx, ty) are needed so the floor can alternate light and dark.
-static int inside_kind(char c, int tx, int ty) {
-  switch (c) {
-    case 'W': return T_I_WALL;
-    case 'V': return T_I_WALL_BOT;
-    case 'L': return T_I_SIDE_L;
-    case 'R': return T_I_SIDE_R;
-    case 'S': return T_I_BANNER;
-    case 'a': return T_COUNTER_L;
-    case 'b': return T_COUNTER_M;
-    case 'c': return T_COUNTER_R;
-    case 'M': return T_MACH_TL;
-    case 'N': return T_MACH_TR;
-    case 'O': return T_MACH_BL;
-    case 'P': return T_MACH_BR;
-    case 'p': return T_PLANT;
-    case 'm': return T_MAT;
-    case 'E': return T_EXIT_DOOR;
-    default:  return ((tx + ty) & 1) ? T_FLOOR2 : T_FLOOR1;
-  }
-}
-
-// Fill map_kind from the town (0) or the Pokemon Center (1).
-static void load_map(int which) {
-  const char (*rows)[MAP_W + 1] = which ? inside_rows : town_rows;
-  int tx, ty;
-  for (ty = 0; ty < MAP_H; ty++) {
-    for (tx = 0; tx < MAP_W; tx++) {
-      int k = which ? inside_kind(rows[ty][tx], tx, ty)
-                    : town_kind(rows[ty][tx]);
-      map_kind[ty][tx] = (unsigned char)k;
-    }
-  }
-}
-
+// ---------- Tile drawing helpers ----------
 // Fill a rectangle inside one tile (x1/y1 not included).
 static void tile_box(unsigned short* t, int x0, int y0, int x1, int y1,
                      unsigned short c) {
@@ -257,19 +300,9 @@ static void tile_box(unsigned short* t, int x0, int y0, int x1, int y1,
       t[y * TILE + x] = c;
 }
 
-// Same, but on a block of 4 tiles (2 wide, 2 tall = 32x32 pixels).
-// 'first' is the top-left tile; first+1 top-right, +2 bottom-left, +3 bottom-right.
-static void big_box(int first, int x0, int y0, int x1, int y1,
-                    unsigned short c) {
-  int x, y;
-  for (y = y0; y < y1; y++)
-    for (x = x0; x < x1; x++)
-      tile_gfx[first + (y >> 4) * 2 + (x >> 4)][(y & 15) * TILE + (x & 15)] = c;
-}
-
-static void copy_tile(int to, int from) {
+static void copy_tile(unsigned short* d, const unsigned short* s) {
   int i;
-  for (i = 0; i < TILE * TILE; i++) tile_gfx[to][i] = tile_gfx[from][i];
+  for (i = 0; i < TILE * TILE; i++) d[i] = s[i];
 }
 
 static void make_roof(unsigned short* t, unsigned short base,
@@ -306,6 +339,14 @@ static void make_wall(unsigned short* t, unsigned short wall,
       t[y * TILE + x] = ((y & 3) == 3 || y >= 14) ? shade : wall;
 }
 
+static void make_floor(unsigned short* t, unsigned short base,
+                       unsigned short edge) {
+  int x, y;
+  for (y = 0; y < TILE; y++)
+    for (x = 0; x < TILE; x++)
+      t[y * TILE + x] = (x == TILE - 1 || y == TILE - 1) ? edge : base;
+}
+
 static void add_window(unsigned short* t, unsigned short frame) {
   tile_box(t, 3, 2, 13, 12, frame);
   tile_box(t, 4, 3, 12, 11, RGB15(14, 24, 31));
@@ -322,105 +363,131 @@ static void add_door(unsigned short* t, unsigned short door,
   tile_box(t, 10, 9, 12, 11, RGB15(31, 27, 5));
 }
 
-// ---- Pokemon Center inside: tile art ----
+// wall + door; split = 1 adds a line down the middle (sliding glass doors)
+static void make_door_tile(unsigned short* t, unsigned short wall,
+                           unsigned short shade, unsigned short door,
+                           unsigned short frame, int split) {
+  make_wall(t, wall, shade);
+  add_door(t, door, frame);
+  if (split) tile_box(t, 7, 2, 9, TILE, frame);
+}
 
-// Tiled floor: a base color with a darker line on the right and bottom.
-static void make_floor(unsigned short* t, unsigned short base) {
-  unsigned short grout = RGB15(21, 17, 11);
-  unsigned short shine = RGB15(31, 30, 26);
+static void make_rug(unsigned short* t, unsigned short base,
+                     unsigned short border) {
   tile_box(t, 0, 0, TILE, TILE, base);
-  tile_box(t, 15, 0, TILE, TILE, grout);
-  tile_box(t, 0, 15, TILE, TILE, grout);
-  t[3 * TILE + 3] = shine;
-  t[3 * TILE + 4] = shine;
-  t[4 * TILE + 3] = shine;
+  tile_box(t, 2, 2, 14, 14, border);
+  tile_box(t, 3, 3, 13, 13, base);
 }
 
-// Pink wall with a darker strip ("baseboard") where it meets the floor.
-// board_low = 1: strip at the bottom (wall above the floor).
-// board_low = 0: strip at the top (wall below the floor).
-static void make_room_wall(unsigned short* t, int board_low) {
-  unsigned short dark  = RGB15(20, 13, 12);
-  unsigned short light = RGB15(26, 19, 18);
-  tile_box(t, 0, 0, TILE, TILE, RGB15(30, 24, 23));
-  tile_box(t, 0, 6, TILE, 8, RGB15(27, 20, 20));
-  if (board_low) {
-    tile_box(t, 0, 12, TILE, TILE, dark);
-    tile_box(t, 0, 12, TILE, 13, light);
-  } else {
-    tile_box(t, 0, 0, TILE, 4, dark);
-    tile_box(t, 0, 3, TILE, 4, light);
+static void make_counter(unsigned short* top, unsigned short* front,
+                         unsigned short hi, unsigned short surf,
+                         unsigned short face, unsigned short panel,
+                         unsigned short dark) {
+  tile_box(top, 0, 0, TILE, TILE, face);
+  tile_box(top, 0, 0, TILE, 8, surf);
+  tile_box(top, 0, 1, TILE, 2, hi);
+  tile_box(top, 0, 8, TILE, 9, dark);
+  tile_box(front, 0, 0, TILE, TILE, face);
+  tile_box(front, 1, 2, 15, 13, panel);
+  tile_box(front, 0, 14, TILE, TILE, dark);
+}
+
+// Shelf with 6 colored items (c[0..2] top row, c[3..5] bottom row)
+static void make_shelf(unsigned short* t, const unsigned short* c) {
+  int i;
+  tile_box(t, 0, 0, TILE, TILE, RGB15(14, 8, 4));
+  tile_box(t, 1, 1, 15, 15, RGB15(7, 5, 4));
+  tile_box(t, 1, 7, 15, 8, RGB15(20, 12, 6));
+  tile_box(t, 1, 14, 15, 15, RGB15(20, 12, 6));
+  for (i = 0; i < 3; i++) {
+    tile_box(t, 2 + i * 4, 3, 5 + i * 4, 7, c[i]);
+    tile_box(t, 2 + i * 4, 10, 5 + i * 4, 14, c[i + 3]);
+    t[3 * TILE + 3 + i * 4] = WHITE;
+    t[10 * TILE + 3 + i * 4] = WHITE;
   }
 }
 
-// Left/right wall with the strip on the side that faces the room.
-static void make_side_wall(unsigned short* t, int left_side) {
-  unsigned short dark  = RGB15(20, 13, 12);
-  unsigned short light = RGB15(26, 19, 18);
-  tile_box(t, 0, 0, TILE, TILE, RGB15(30, 24, 23));
-  if (left_side) {
-    tile_box(t, 12, 0, TILE, TILE, dark);
-    tile_box(t, 12, 0, 13, TILE, light);
-  } else {
-    tile_box(t, 0, 0, 4, TILE, dark);
-    tile_box(t, 3, 0, 4, TILE, light);
-  }
+// Bookshelf: two rows of colored books
+static void make_books(unsigned short* t, int off) {
+  static const unsigned short bc[4] = {
+    RGB15(27, 5, 7), RGB15(6, 15, 29), RGB15(31, 27, 5), RGB15(4, 22, 10)
+  };
+  int i, r;
+  tile_box(t, 0, 0, TILE, TILE, RGB15(14, 8, 4));
+  tile_box(t, 1, 1, 15, 15, RGB15(7, 5, 4));
+  tile_box(t, 1, 7, 15, 8, RGB15(20, 12, 6));
+  tile_box(t, 1, 14, 15, 15, RGB15(20, 12, 6));
+  for (r = 0; r < 2; r++)
+    for (i = 0; i < 6; i++)
+      tile_box(t, 2 + i * 2, 2 + r * 7 + ((i + r) & 1), 4 + i * 2,
+               7 + r * 7, bc[(i + off + r * 2) & 3]);
 }
 
-// Wooden reception counter piece (left end, middle, or right end).
-static void make_counter(unsigned short* t, int left_end, int right_end) {
-  unsigned short edge = RGB15(10, 5, 3);
-  tile_box(t, 0, 0, TILE, TILE, RGB15(19, 10, 5));           // front
-  tile_box(t, 0, 0, TILE, 8, RGB15(27, 16, 8));              // top surface
-  tile_box(t, 0, 1, TILE, 2, RGB15(30, 21, 12));             // shine
-  tile_box(t, 0, 0, TILE, 1, edge);
-  tile_box(t, 0, 15, TILE, TILE, edge);
-  tile_box(t, 0, 8, TILE, 9, edge);
-  tile_box(t, 2, 10, 14, 14, RGB15(23, 13, 7));              // panel
-  if (left_end)  { tile_box(t, 0, 0, 1, TILE, edge); tile_box(t, 1, 1, 2, 8, RGB15(30, 21, 12)); }
-  if (right_end) { tile_box(t, 15, 0, TILE, TILE, edge); }
+static void make_bed_head(unsigned short* t, unsigned short frame,
+                          unsigned short blanket) {
+  unsigned short sheet = RGB15(29, 29, 31);
+  tile_box(t, 0, 0, TILE, TILE, frame);
+  tile_box(t, 1, 1, 15, TILE, sheet);
+  tile_box(t, 3, 2, 13, 7, WHITE);
+  tile_box(t, 3, 6, 13, 7, RGB15(24, 24, 27));
+  tile_box(t, 1, 8, 15, TILE, blanket);
+  tile_box(t, 1, 8, 15, 9, sheet);
 }
 
-// Potted plant on the floor.
+static void make_bed_foot(unsigned short* t, unsigned short frame,
+                          unsigned short blanket) {
+  tile_box(t, 0, 0, TILE, TILE, frame);
+  tile_box(t, 1, 0, 15, 13, blanket);
+  tile_box(t, 1, 3, 15, 4, RGB15(29, 29, 31));
+}
+
+static void make_table(unsigned short* t, unsigned short top,
+                       unsigned short edge, unsigned short light) {
+  tile_box(t, 0, 0, TILE, TILE, top);
+  tile_box(t, 0, 0, TILE, 2, edge);
+  tile_box(t, 0, 14, TILE, TILE, edge);
+  tile_box(t, 6, 6, 10, 10, light);
+}
+
+// Furniture that stands on the floor copies floor tile 0 first.
+static void make_chair(unsigned short* t, unsigned short wood,
+                       unsigned short dark) {
+  copy_tile(t, tile_gfx[0]);
+  tile_box(t, 4, 3, 12, 5, dark);
+  tile_box(t, 4, 5, 12, 12, wood);
+}
+
 static void make_plant(unsigned short* t) {
-  copy_tile(T_PLANT, T_FLOOR2);
-  tile_box(t, 3, 1, 13, 9, RGB15(4, 15, 8));
-  tile_box(t, 4, 2, 12, 8, RGB15(4, 24, 13));
-  tile_box(t, 5, 3, 8, 5, RGB15(10, 28, 16));
-  tile_box(t, 4, 9, 12, 10, RGB15(21, 12, 6));
-  tile_box(t, 5, 10, 11, 15, RGB15(17, 10, 5));
-  tile_box(t, 5, 14, 11, 15, RGB15(10, 5, 3));
+  copy_tile(t, tile_gfx[0]);
+  tile_box(t, 3, 2, 13, 10, RGB15(3, 16, 7));
+  tile_box(t, 5, 3, 11, 8, RGB15(6, 24, 10));
+  tile_box(t, 4, 10, 12, 15, RGB15(17, 10, 5));
+  tile_box(t, 3, 10, 13, 11, RGB15(12, 6, 3));
 }
 
-// The healing machine: 2x2 tiles (32x32 pixels).
-static void make_machine(void) {
-  int first = T_MACH_TL;
-  int bx, i;
-  unsigned short red = RGB15(27, 5, 7);
-  // background: wall behind the top half, floor behind the bottom half
-  copy_tile(T_MACH_TL, T_I_WALL);
-  copy_tile(T_MACH_TR, T_I_WALL);
-  copy_tile(T_MACH_BL, T_FLOOR1);
-  copy_tile(T_MACH_BR, T_FLOOR1);
-  big_box(first, 1, 2, 31, 32, OUTLINE);                       // outline
-  big_box(first, 2, 3, 30, 31, RGB15(28, 29, 31));             // body
-  big_box(first, 2, 28, 30, 31, RGB15(20, 22, 26));            // lower shade
-  big_box(first, 3, 4, 29, 10, RGB15(6, 15, 29));              // blue band
-  big_box(first, 3, 4, 29, 5, RGB15(12, 21, 31));
-  big_box(first, 5, 12, 27, 20, RGB15(4, 6, 10));              // screen frame
-  big_box(first, 6, 13, 26, 19, RGB15(4, 24, 13));             // screen
-  big_box(first, 15, 14, 17, 18, WHITE);                       // white cross
-  big_box(first, 13, 15, 19, 17, WHITE);
-  for (i = 0; i < 3; i++) {                                    // three balls
-    bx = 5 + i * 8;
-    big_box(first, bx, 22, bx + 6, 24, red);
-    big_box(first, bx, 24, bx + 6, 25, OUTLINE);
-    big_box(first, bx, 25, bx + 6, 28, WHITE);
-    big_box(first, bx + 2, 24, bx + 4, 25, WHITE);
-  }
+// Small person; hat = CLEAR for none.
+static void make_npc(unsigned short* t, unsigned short hair,
+                     unsigned short shirt, unsigned short pants,
+                     unsigned short hat) {
+  unsigned short skin = RGB15(31, 24, 18);
+  copy_tile(t, tile_gfx[0]);
+  tile_box(t, 5, 2, 11, 4, hair);
+  tile_box(t, 5, 4, 11, 8, skin);
+  tile_box(t, 6, 5, 7, 6, OUTLINE);
+  tile_box(t, 9, 5, 10, 6, OUTLINE);
+  if (hat != CLEAR) tile_box(t, 4, 1, 12, 4, hat);
+  tile_box(t, 4, 8, 12, 13, shirt);
+  tile_box(t, 2, 8, 4, 12, shirt);
+  tile_box(t, 12, 8, 14, 12, shirt);
+  tile_box(t, 2, 12, 4, 13, skin);
+  tile_box(t, 12, 12, 14, 13, skin);
+  tile_box(t, 5, 13, 11, 16, pants);
+  tile_box(t, 5, 15, 8, 16, OUTLINE);
+  tile_box(t, 8, 15, 11, 16, OUTLINE);
 }
 
-static void build_tiles(void) {
+// ---------- One builder per room ----------
+static void build_town(void) {
   unsigned short grass       = RGB15(10, 24, 8);
   unsigned short grass_light = RGB15(13, 27, 10);
   unsigned short grass_dark  = RGB15(6, 18, 5);
@@ -434,94 +501,178 @@ static void build_tiles(void) {
     for (x = 0; x < TILE; x++) {
       int i = y * TILE + x;
       int pattern = (x * 7 + y * 11 + x * y * 3) & 15;
-      tile_gfx[T_GRASS][i] = grass;
+      tile_gfx[TW_GRASS][i] = grass;
       if (pattern == 0 || pattern == 5)
-        tile_gfx[T_GRASS][i] = grass_dark;
+        tile_gfx[TW_GRASS][i] = grass_dark;
       if (pattern == 10 && (y & 1))
-        tile_gfx[T_GRASS][i] = grass_light;
-      tile_gfx[T_PATH][i] = dirt;
+        tile_gfx[TW_GRASS][i] = grass_light;
+      tile_gfx[TW_PATH][i] = dirt;
       if (pattern == 2 || pattern == 11)
-        tile_gfx[T_PATH][i] = dirt_dark;
+        tile_gfx[TW_PATH][i] = dirt_dark;
       if (pattern == 7 && (x & 1))
-        tile_gfx[T_PATH][i] = dirt_light;
-      tile_gfx[T_FLOWER][i] = tile_gfx[T_GRASS][i];
+        tile_gfx[TW_PATH][i] = dirt_light;
+      tile_gfx[TW_FLOWER][i] = tile_gfx[TW_GRASS][i];
     }
   }
 
   // Flowers: pink, white, yellow
-  tile_box(tile_gfx[T_FLOWER], 4, 4, 6, 6, RGB15(31, 10, 22));
-  tile_gfx[T_FLOWER][5 * TILE + 5] = yel;
-  tile_box(tile_gfx[T_FLOWER], 10, 9, 12, 11, WHITE);
-  tile_gfx[T_FLOWER][10 * TILE + 11] = yel;
-  tile_box(tile_gfx[T_FLOWER], 5, 12, 7, 14, yel);
+  tile_box(tile_gfx[TW_FLOWER], 4, 4, 6, 6, RGB15(31, 10, 22));
+  tile_gfx[TW_FLOWER][5 * TILE + 5] = yel;
+  tile_box(tile_gfx[TW_FLOWER], 10, 9, 12, 11, WHITE);
+  tile_gfx[TW_FLOWER][10 * TILE + 11] = yel;
+  tile_box(tile_gfx[TW_FLOWER], 5, 12, 7, 14, yel);
 
   // Tree over grass
   for (y = 0; y < TILE; y++) {
     for (x = 0; x < TILE; x++) {
       int i = y * TILE + x;
       unsigned short c = letter_color(art_tree[y][x]);
-      tile_gfx[T_TREE][i] = (c == CLEAR) ? tile_gfx[T_GRASS][i] : c;
+      tile_gfx[TW_TREE][i] = (c == CLEAR) ? tile_gfx[TW_GRASS][i] : c;
     }
   }
 
   // Houses: orange and purple roofs
-  make_roof(tile_gfx[T_ROOF_H1], RGB15(24, 10, 6), RGB15(28, 14, 9), RGB15(16, 6, 4));
-  make_roof(tile_gfx[T_ROOF_H2], RGB15(18, 10, 22), RGB15(22, 14, 26), RGB15(12, 6, 15));
-  make_wall(tile_gfx[T_WALL_H], RGB15(30, 26, 18), RGB15(25, 21, 13));
-  add_window(tile_gfx[T_WALL_H], RGB15(10, 6, 3));
-  make_wall(tile_gfx[T_DOOR_H], RGB15(30, 26, 18), RGB15(25, 21, 13));
-  add_door(tile_gfx[T_DOOR_H], RGB15(17, 10, 4), RGB15(9, 5, 2));
+  make_roof(tile_gfx[TW_ROOF_H1], RGB15(24, 10, 6), RGB15(28, 14, 9), RGB15(16, 6, 4));
+  make_roof(tile_gfx[TW_ROOF_H2], RGB15(18, 10, 22), RGB15(22, 14, 26), RGB15(12, 6, 15));
+  make_wall(tile_gfx[TW_WALL_H], RGB15(30, 26, 18), RGB15(25, 21, 13));
+  add_window(tile_gfx[TW_WALL_H], RGB15(10, 6, 3));
+  make_door_tile(tile_gfx[TW_DOOR_H], RGB15(30, 26, 18), RGB15(25, 21, 13),
+                 RGB15(17, 10, 4), RGB15(9, 5, 2), 0);
 
   // Pokemon Center: red roof, P sign
-  make_roof(tile_gfx[T_ROOF_C], RGB15(29, 5, 5), RGB15(31, 10, 9), RGB15(20, 2, 3));
-  make_roof(tile_gfx[T_SIGN_C], RGB15(29, 5, 5), RGB15(31, 10, 9), RGB15(20, 2, 3));
-  add_sign(tile_gfx[T_SIGN_C], glyph_p, RGB15(29, 3, 3));
-  make_wall(tile_gfx[T_WALL_C], RGB15(31, 27, 26), RGB15(27, 22, 22));
-  add_window(tile_gfx[T_WALL_C], RGB15(12, 12, 14));
-  make_wall(tile_gfx[T_DOOR_C], RGB15(31, 27, 26), RGB15(27, 22, 22));
-  add_door(tile_gfx[T_DOOR_C], RGB15(18, 26, 30), RGB15(12, 12, 14));
-  tile_box(tile_gfx[T_DOOR_C], 7, 2, 9, TILE, RGB15(12, 12, 14));
+  make_roof(tile_gfx[TW_ROOF_C], RGB15(29, 5, 5), RGB15(31, 10, 9), RGB15(20, 2, 3));
+  make_roof(tile_gfx[TW_SIGN_C], RGB15(29, 5, 5), RGB15(31, 10, 9), RGB15(20, 2, 3));
+  add_sign(tile_gfx[TW_SIGN_C], glyph_p, RGB15(29, 3, 3));
+  make_wall(tile_gfx[TW_WALL_C], RGB15(31, 27, 26), RGB15(27, 22, 22));
+  add_window(tile_gfx[TW_WALL_C], RGB15(12, 12, 14));
+  make_door_tile(tile_gfx[TW_DOOR_C], RGB15(31, 27, 26), RGB15(27, 22, 22),
+                 RGB15(18, 26, 30), RGB15(12, 12, 14), 1);
 
   // Poke Mart: blue roof, M sign
-  make_roof(tile_gfx[T_ROOF_M], RGB15(4, 10, 26), RGB15(8, 15, 30), RGB15(2, 5, 16));
-  make_roof(tile_gfx[T_SIGN_M], RGB15(4, 10, 26), RGB15(8, 15, 30), RGB15(2, 5, 16));
-  add_sign(tile_gfx[T_SIGN_M], glyph_m, RGB15(4, 10, 26));
-  make_wall(tile_gfx[T_WALL_M], RGB15(24, 28, 31), RGB15(19, 23, 28));
-  add_window(tile_gfx[T_WALL_M], RGB15(4, 6, 14));
-  make_wall(tile_gfx[T_DOOR_M], RGB15(24, 28, 31), RGB15(19, 23, 28));
-  add_door(tile_gfx[T_DOOR_M], RGB15(10, 18, 28), RGB15(4, 6, 14));
-  tile_box(tile_gfx[T_DOOR_M], 7, 2, 9, TILE, RGB15(4, 6, 14));
+  make_roof(tile_gfx[TW_ROOF_M], RGB15(4, 10, 26), RGB15(8, 15, 30), RGB15(2, 5, 16));
+  make_roof(tile_gfx[TW_SIGN_M], RGB15(4, 10, 26), RGB15(8, 15, 30), RGB15(2, 5, 16));
+  add_sign(tile_gfx[TW_SIGN_M], glyph_m, RGB15(4, 10, 26));
+  make_wall(tile_gfx[TW_WALL_M], RGB15(24, 28, 31), RGB15(19, 23, 28));
+  add_window(tile_gfx[TW_WALL_M], RGB15(4, 6, 14));
+  make_door_tile(tile_gfx[TW_DOOR_M], RGB15(24, 28, 31), RGB15(19, 23, 28),
+                 RGB15(10, 18, 28), RGB15(4, 6, 14), 1);
+}
 
-  // ---- Inside the Pokemon Center ----
-  make_floor(tile_gfx[T_FLOOR1], RGB15(29, 26, 20));
-  make_floor(tile_gfx[T_FLOOR2], RGB15(26, 22, 16));
+static void build_center(void) {
+  make_floor(tile_gfx[IC_FA], RGB15(25, 22, 16), RGB15(21, 18, 12));
+  make_floor(tile_gfx[IC_FB], RGB15(28, 25, 19), RGB15(21, 18, 12));
+  make_rug(tile_gfx[IC_MAT], RGB15(27, 5, 7), WHITE);
+  make_wall(tile_gfx[IC_WALL], RGB15(31, 27, 26), RGB15(27, 22, 22));
+  make_wall(tile_gfx[IC_SIGN], RGB15(31, 27, 26), RGB15(27, 22, 22));
+  add_sign(tile_gfx[IC_SIGN], glyph_p, RGB15(29, 3, 3));
+  make_door_tile(tile_gfx[IC_DOOR], RGB15(31, 27, 26), RGB15(27, 22, 22),
+                 RGB15(18, 26, 30), RGB15(12, 12, 14), 1);
+  make_counter(tile_gfx[IC_CNT], tile_gfx[IC_CNTF], RGB15(30, 20, 12),
+               RGB15(26, 15, 8), RGB15(18, 10, 5), RGB15(22, 12, 6),
+               RGB15(12, 6, 3));
+  tile_box(tile_gfx[IC_MCH_T], 0, 0, TILE, TILE, RGB15(25, 25, 28));
+  tile_box(tile_gfx[IC_MCH_T], 1, 1, 15, TILE, WHITE);
+  tile_box(tile_gfx[IC_MCH_T], 3, 3, 13, 12, RGB15(6, 15, 29));
+  tile_box(tile_gfx[IC_MCH_T], 5, 5, 11, 10, RGB15(4, 24, 13));
+  tile_box(tile_gfx[IC_MCH_T], 7, 6, 9, 8, WHITE);
+  tile_box(tile_gfx[IC_MCH_B], 0, 0, TILE, TILE, WHITE);
+  tile_box(tile_gfx[IC_MCH_B], 0, 13, TILE, TILE, RGB15(19, 19, 23));
+  tile_box(tile_gfx[IC_MCH_B], 2, 3, 6, 8, RGB15(27, 5, 7));
+  tile_box(tile_gfx[IC_MCH_B], 10, 3, 14, 8, RGB15(27, 5, 7));
+  tile_box(tile_gfx[IC_MCH_B], 3, 4, 5, 5, WHITE);
+  tile_box(tile_gfx[IC_MCH_B], 11, 4, 13, 5, WHITE);
+  make_plant(tile_gfx[IC_PLANT]);
+}
 
-  // door mat: red with cream stripes (3 mat tiles side by side join up)
-  tile_box(tile_gfx[T_MAT], 0, 0, TILE, TILE, RGB15(27, 5, 7));
-  tile_box(tile_gfx[T_MAT], 0, 0, TILE, 2, RGB15(31, 28, 22));
-  tile_box(tile_gfx[T_MAT], 0, 14, TILE, TILE, RGB15(31, 28, 22));
-  tile_box(tile_gfx[T_MAT], 0, 2, TILE, 4, RGB15(20, 3, 5));
-  tile_box(tile_gfx[T_MAT], 0, 12, TILE, 14, RGB15(20, 3, 5));
-  tile_box(tile_gfx[T_MAT], 0, 7, TILE, 9, RGB15(31, 9, 10));
+static void build_mart(void) {
+  static const unsigned short sa[6] = {
+    RGB15(27, 5, 7), RGB15(6, 15, 29), RGB15(31, 27, 5),
+    RGB15(4, 22, 10), RGB15(31, 14, 22), RGB15(20, 8, 26)
+  };
+  static const unsigned short sb[6] = {
+    RGB15(31, 27, 5), RGB15(31, 31, 31), RGB15(27, 5, 7),
+    RGB15(6, 15, 29), RGB15(27, 5, 7), RGB15(31, 31, 31)
+  };
+  make_floor(tile_gfx[IM_FA], RGB15(24, 27, 31), RGB15(19, 23, 28));
+  make_floor(tile_gfx[IM_FB], RGB15(27, 29, 31), RGB15(19, 23, 28));
+  make_rug(tile_gfx[IM_MAT], RGB15(6, 12, 26), WHITE);
+  make_wall(tile_gfx[IM_WALL], RGB15(24, 28, 31), RGB15(19, 23, 28));
+  make_wall(tile_gfx[IM_SIGN], RGB15(24, 28, 31), RGB15(19, 23, 28));
+  add_sign(tile_gfx[IM_SIGN], glyph_m, RGB15(4, 10, 26));
+  make_door_tile(tile_gfx[IM_DOOR], RGB15(24, 28, 31), RGB15(19, 23, 28),
+                 RGB15(10, 18, 28), RGB15(4, 6, 14), 1);
+  make_counter(tile_gfx[IM_CNT], tile_gfx[IM_CNTF], WHITE, RGB15(22, 26, 31),
+               RGB15(6, 12, 26), RGB15(9, 16, 29), RGB15(2, 5, 16));
+  make_shelf(tile_gfx[IM_SHELF_A], sa);
+  make_shelf(tile_gfx[IM_SHELF_B], sb);
+  make_npc(tile_gfx[IM_NPC], RGB15(12, 7, 3), RGB15(6, 15, 29),
+           RGB15(4, 6, 14), RGB15(5, 11, 27));
+  make_plant(tile_gfx[IM_PLANT]);
+}
 
-  make_room_wall(tile_gfx[T_I_WALL], 1);
-  make_room_wall(tile_gfx[T_I_WALL_BOT], 0);
-  make_side_wall(tile_gfx[T_I_SIDE_L], 1);
-  make_side_wall(tile_gfx[T_I_SIDE_R], 0);
+static void build_house1(void) {
+  unsigned short wall = RGB15(31, 24, 20), shade = RGB15(26, 18, 15);
+  make_floor(tile_gfx[H1_FA], RGB15(22, 14, 7), RGB15(16, 9, 4));
+  make_floor(tile_gfx[H1_FB], RGB15(24, 16, 8), RGB15(16, 9, 4));
+  make_rug(tile_gfx[H1_RUG], RGB15(27, 8, 8), RGB15(31, 24, 10));
+  make_wall(tile_gfx[H1_WALL], wall, shade);
+  make_wall(tile_gfx[H1_WIN], wall, shade);
+  add_window(tile_gfx[H1_WIN], RGB15(10, 6, 3));
+  make_door_tile(tile_gfx[H1_DOOR], wall, shade, RGB15(17, 10, 4),
+                 RGB15(9, 5, 2), 0);
+  make_bed_head(tile_gfx[H1_BED_H], RGB15(12, 7, 3), RGB15(27, 6, 8));
+  make_bed_foot(tile_gfx[H1_BED_F], RGB15(12, 7, 3), RGB15(27, 6, 8));
+  make_table(tile_gfx[H1_TABLE], RGB15(25, 15, 8), RGB15(14, 8, 4),
+             RGB15(30, 22, 14));
+  make_chair(tile_gfx[H1_CHAIR], RGB15(20, 11, 5), RGB15(12, 6, 3));
+  make_plant(tile_gfx[H1_PLANT]);
+  make_npc(tile_gfx[H1_NPC], RGB15(22, 12, 4), RGB15(31, 16, 20),
+           RGB15(20, 10, 12), CLEAR);
+}
 
-  make_room_wall(tile_gfx[T_I_BANNER], 1);
-  add_sign(tile_gfx[T_I_BANNER], glyph_p, RGB15(29, 3, 3));
+static void build_house2(void) {
+  unsigned short wall = RGB15(19, 27, 19), shade = RGB15(14, 22, 14);
+  make_floor(tile_gfx[H2_FA], RGB15(13, 16, 25), RGB15(9, 11, 20));
+  make_floor(tile_gfx[H2_FB], RGB15(15, 18, 27), RGB15(9, 11, 20));
+  make_rug(tile_gfx[H2_RUG], RGB15(28, 17, 6), RGB15(31, 27, 12));
+  make_wall(tile_gfx[H2_WALL], wall, shade);
+  make_wall(tile_gfx[H2_WIN], wall, shade);
+  add_window(tile_gfx[H2_WIN], RGB15(9, 6, 4));
+  make_door_tile(tile_gfx[H2_DOOR], wall, shade, RGB15(12, 12, 16),
+                 RGB15(6, 6, 9), 0);
+  make_books(tile_gfx[H2_SHELF_A], 0);
+  make_books(tile_gfx[H2_SHELF_B], 2);
+  make_bed_head(tile_gfx[H2_BED_H], RGB15(9, 6, 4), RGB15(7, 11, 27));
+  make_bed_foot(tile_gfx[H2_BED_F], RGB15(9, 6, 4), RGB15(7, 11, 27));
+  make_table(tile_gfx[H2_TABLE], RGB15(17, 10, 6), RGB15(9, 5, 3),
+             RGB15(24, 16, 10));
+  make_chair(tile_gfx[H2_CHAIR], RGB15(14, 9, 6), RGB15(8, 5, 3));
+  make_plant(tile_gfx[H2_PLANT]);
+  make_npc(tile_gfx[H2_NPC], RGB15(26, 26, 26), RGB15(6, 18, 9),
+           RGB15(10, 8, 4), CLEAR);
+}
 
-  make_room_wall(tile_gfx[T_EXIT_DOOR], 0);
-  add_door(tile_gfx[T_EXIT_DOOR], RGB15(18, 26, 30), RGB15(12, 12, 14));
-  tile_box(tile_gfx[T_EXIT_DOOR], 7, 2, 9, TILE, RGB15(12, 12, 14));
+static const Room rooms[NUM_ROOMS] = {
+  { town_rows,   town_keys,   town_kinds,   TW_TREE,     0, build_town   },
+  { center_rows, center_keys, center_kinds, SOLID_INSIDE, 1, build_center },
+  { mart_rows,   mart_keys,   mart_kinds,   SOLID_INSIDE, 1, build_mart   },
+  { house1_rows, house1_keys, house1_kinds, SOLID_INSIDE, 1, build_house1 },
+  { house2_rows, house2_keys, house2_kinds, SOLID_INSIDE, 1, build_house2 }
+};
 
-  make_counter(tile_gfx[T_COUNTER_L], 1, 0);
-  make_counter(tile_gfx[T_COUNTER_M], 0, 0);
-  make_counter(tile_gfx[T_COUNTER_R], 0, 1);
-
-  make_plant(tile_gfx[T_PLANT]);
-  make_machine();
+// Turn map letters into tile numbers (unknown letters: tile 0).
+static void build_map(int m) {
+  const Room* r = &rooms[m];
+  int tx, ty, i;
+  for (ty = 0; ty < MAP_H; ty++) {
+    for (tx = 0; tx < MAP_W; tx++) {
+      int k = 0;
+      for (i = 0; r->keys[i]; i++)
+        if (r->keys[i] == r->rows[ty][tx]) { k = r->kinds[i]; break; }
+      if (r->checker && k == 0 && ((tx + ty) & 1)) k = 1;
+      map_kind[m][ty][tx] = (unsigned char)k;
+    }
+  }
 }
 
 static void build_sprites(void) {
@@ -553,7 +704,7 @@ static void build_sprites(void) {
 
 // Paint a screen rectangle (right/bottom not included). Each pixel's final
 // color (map, then trainer on top) is worked out first and written ONCE,
-// so the trainer is never painted over.
+// so the trainer is never painted over and nothing is erased first.
 static void paint_box(int left, int top, int right, int bottom,
                       int px, int py, int dir) {
   int sx, sy;
@@ -567,7 +718,7 @@ static void paint_box(int left, int top, int right, int bottom,
     int in_rows = (sy >= py && sy < py + TILE);
     for (sx = left; sx < right; sx++) {
       unsigned short color =
-          tile_gfx[map_kind[sy >> 4][sx >> 4]][((sy & 15) << 4) | (sx & 15)];
+          tile_gfx[map_kind[cur_room][sy >> 4][sx >> 4]][((sy & 15) << 4) | (sx & 15)];
       if (in_rows && sx >= px && sx < px + TILE) {
         unsigned short c = sprite_gfx[dir][walk_frame][(sy - py) * TILE + (sx - px)];
         if (c != CLEAR) color = c;
@@ -577,11 +728,30 @@ static void paint_box(int left, int top, int right, int bottom,
   }
 }
 
-// Trees, buildings, walls, the counter... (kind >= T_TREE) and the screen
-// edge block you.
+static void wait_vblank(void) {
+  while (REG_VCOUNT >= 160) {}
+  while (REG_VCOUNT < 160) {}
+}
+
+// Full-screen repaint (start, entering, leaving). Mode 3 has ONE framebuffer,
+// so a long repaint would be seen half-finished. Forced blank hides it.
+static void show_map(int x, int y, int dir) {
+  wait_vblank();
+  REG_DISPCNT = 0x0080;
+  paint_box(0, 0, SCREEN_W, SCREEN_H, x, y, dir);
+  REG_DISPCNT = 0x0403;
+}
+
+// Tile number at a pixel of the current room, or -1 outside the screen.
+static int tile_at(int px, int py) {
+  if (px < 0 || py < 0 || px >= SCREEN_W || py >= SCREEN_H) return -1;
+  return map_kind[cur_room][py >> 4][px >> 4];
+}
+
+// Solid tiles and the screen edge block you.
 static int is_blocked(int px, int py) {
-  if (px < 0 || py < 0 || px >= SCREEN_W || py >= SCREEN_H) return 1;
-  return map_kind[py >> 4][px >> 4] >= T_TREE;
+  int k = tile_at(px, py);
+  return k < 0 || k >= rooms[cur_room].solid_from;
 }
 
 // Body box is smaller than a tile, so its 4 corners are enough.
@@ -592,12 +762,36 @@ static int can_stand(int px, int py) {
          !is_blocked(px + HB_RIGHT, py + HB_BOTTOM);
 }
 
-// Put the trainer on map square (tx, ty). If that spot is blocked (for
-// example after you edit a map), use the first free square we can find.
-static void pick_spot(int tx0, int ty0, int* out_x, int* out_y) {
+// Index of the door at this pixel of the current room, or -1.
+static int door_at(int px, int py) {
+  int i, tx, ty;
+  if (px < 0 || py < 0 || px >= SCREEN_W || py >= SCREEN_H) return -1;
+  tx = px >> 4;
+  ty = py >> 4;
+  for (i = 0; i < NUM_DOORS; i++)
+    if (doors[i].from == cur_room && doors[i].tx == tx && doors[i].ty == ty)
+      return i;
+  return -1;
+}
+
+// The door right in front of the trainer (within 3 px), or -1.
+// Two probe points across the facing edge make it forgiving to line up.
+static int front_door(int x, int y, int dir) {
+  int ax, ay, bx, by, d;
+  if (dir == DIR_UP)        { ay = by = y + HB_TOP - 3;    ax = x + HB_LEFT + 2; bx = x + HB_RIGHT - 2; }
+  else if (dir == DIR_DOWN) { ay = by = y + HB_BOTTOM + 3; ax = x + HB_LEFT + 2; bx = x + HB_RIGHT - 2; }
+  else if (dir == DIR_LEFT) { ax = bx = x + HB_LEFT - 3;   ay = y + HB_TOP + 2;  by = y + HB_BOTTOM - 2; }
+  else                      { ax = bx = x + HB_RIGHT + 3;  ay = y + HB_TOP + 2;  by = y + HB_BOTTOM - 2; }
+  d = door_at(ax, ay);
+  if (d < 0) d = door_at(bx, by);
+  return d;
+}
+
+// Put the trainer on tile (stx, sty); if that is blocked use the first free tile.
+static void pick_start(int stx, int sty, int* out_x, int* out_y) {
   int tx, ty;
-  *out_x = tx0 * TILE;
-  *out_y = ty0 * TILE;
+  *out_x = stx * TILE;
+  *out_y = sty * TILE;
   if (can_stand(*out_x, *out_y)) return;
   for (ty = 0; ty < MAP_H; ty++) {
     for (tx = 0; tx < MAP_W; tx++) {
@@ -610,40 +804,8 @@ static void pick_spot(int tx0, int ty0, int* out_x, int* out_y) {
   }
 }
 
-// What kind of tile is the trainer looking at, right in front of them?
-// (-1 if that is outside the screen.)
-static int tile_in_front(int px, int py, int dir) {
-  int fx, fy;
-  if (dir == DIR_UP)        { fx = px + 8;             fy = py + HB_TOP - 2;    }
-  else if (dir == DIR_DOWN) { fx = px + 8;             fy = py + HB_BOTTOM + 2; }
-  else if (dir == DIR_LEFT) { fx = px + HB_LEFT - 2;   fy = py + 8;             }
-  else                      { fx = px + HB_RIGHT + 2;  fy = py + 8;             }
-  if (fx < 0 || fy < 0 || fx >= SCREEN_W || fy >= SCREEN_H) return -1;
-  return map_kind[fy >> 4][fx >> 4];
-}
-
-// Go into the Pokemon Center (to_inside = 1) or back out to town (0).
-// The screen is blanked while the new picture is painted, so you never
-// see it half-drawn.
-static void change_map(int to_inside, int* x, int* y, int* dir) {
-  REG_DISPCNT = 0x0080;               // forced blank
-  inside = to_inside;
-  load_map(inside);
-  if (inside) {
-    pick_spot(INSIDE_START_TX, INSIDE_START_TY, x, y);
-    *dir = DIR_UP;
-  } else {
-    pick_spot(TOWN_EXIT_TX, TOWN_EXIT_TY, x, y);
-    *dir = DIR_DOWN;
-  }
-  walk_frame = 0;
-  walk_timer = 0;
-  paint_box(0, 0, SCREEN_W, SCREEN_H, *x, *y, *dir);
-  REG_DISPCNT = 0x0403;               // Mode 3 + show BG2
-}
-
 #if DEBUG_HUD
-// Lamps live in the top wall/tree row, where the trainer can never walk.
+// Lamps live in the top row (always solid), where the trainer can't walk.
 static void lamp(int slot, int on, unsigned short color) {
   int lx = 2 + slot * 8;
   int x, y;
@@ -652,8 +814,7 @@ static void lamp(int slot, int on, unsigned short color) {
       VRAM[y * SCREEN_W + x] = on ? color : RGB15(4, 4, 4);
 }
 
-// 0 blinks = loop runs; 1-4 = LEFT/RIGHT/UP/DOWN; 5 = moved; 6 = blocked;
-// 7 (orange) = A button
+// 0 blinks = loop runs; 1-4 = LEFT/RIGHT/UP/DOWN; 5 = moved; 6 = blocked
 static void show_lamps(unsigned int frame, unsigned short keys,
                        int moved, int blocked) {
   lamp(0, (frame >> 5) & 1, RGB15(31, 0, 31));
@@ -663,29 +824,23 @@ static void show_lamps(unsigned int frame, unsigned short keys,
   lamp(4, keys & KEY_DOWN,  RGB15(0, 31, 31));
   lamp(5, moved,            RGB15(31, 31, 31));
   lamp(6, blocked,          RGB15(31, 0, 0));
-  lamp(7, keys & KEY_A,     RGB15(31, 20, 0));
 }
 #endif
-
-static void wait_vblank(void) {
-  while (REG_VCOUNT >= 160) {}
-  while (REG_VCOUNT < 160) {}
-}
 
 int main(void) {
   int x, y;
   int dir = DIR_UP;
-  int n;
+  int n, m;
   unsigned int frame = 0;
   unsigned short prev_keys = 0;
 
-  REG_DISPCNT = 0x0080;   // forced blank while we build the first picture
-  build_tiles();
-  load_map(0);
+  REG_DISPCNT = 0x0080;   // forced blank while we build everything
+  for (m = 0; m < NUM_ROOMS; m++) build_map(m);
   build_sprites();
-  pick_spot(START_TX, START_TY, &x, &y);
-  paint_box(0, 0, SCREEN_W, SCREEN_H, x, y, dir);
-  REG_DISPCNT = 0x0403;   // Mode 3 + show BG2
+  cur_room = R_TOWN;
+  rooms[cur_room].build();
+  pick_start(START_TX, START_TY, &x, &y);
+  show_map(x, y, dir);
 
 #if DEBUG_HUD
   lamp(0, 1, RGB15(0, 31, 0));
@@ -696,10 +851,25 @@ int main(void) {
     int old_x = x, old_y = y, old_dir = dir;
     int old_walk_frame = walk_frame;
     int dx = 0, dy = 0;
-    int moved;
+    int moved, door;
     wait_vblank();
     frame++;
-    keys = ~REG_KEYINPUT;
+    keys = (unsigned short)(~REG_KEYINPUT) & 0x03FF;
+
+    // A button: only on the press (not while held), only facing a door.
+    door = ((keys & KEY_A) && !(prev_keys & KEY_A)) ? front_door(x, y, dir) : -1;
+    if (door >= 0) {
+      cur_room = doors[door].to;
+      rooms[cur_room].build();          // this room's pictures
+      pick_start(doors[door].sx, doors[door].sy, &x, &y);
+      dir = doors[door].sdir;
+      walk_frame = 0;
+      walk_timer = 0;
+      show_map(x, y, dir);
+      prev_keys = keys;
+      continue;
+    }
+    prev_keys = keys;
 
     if (keys & KEY_LEFT)  { dx = -1; dir = DIR_LEFT;  }
     if (keys & KEY_RIGHT) { dx =  1; dir = DIR_RIGHT; }
@@ -721,7 +891,7 @@ int main(void) {
       walk_frame = 0;
     }
 
-    // Repaint one box covering the old and new trainer position.
+    // Repaint only one box covering the old and new trainer position.
     if (moved || dir != old_dir || walk_frame != old_walk_frame) {
       int left   = (x < old_x) ? x : old_x;
       int top    = (y < old_y) ? y : old_y;
@@ -730,20 +900,8 @@ int main(void) {
       paint_box(left, top, right, bottom, x, y, dir);
     }
 
-    // A button: only the moment it is pressed (holding it does nothing).
-    // Town: face the Center's door -> go in.  Inside: face the exit door -> go out.
-    if ((keys & KEY_A) && !(prev_keys & KEY_A)) {
-      int front = tile_in_front(x, y, dir);
-      if (!inside && dir == DIR_UP && front == T_DOOR_C)
-        change_map(1, &x, &y, &dir);
-      else if (inside && dir == DIR_DOWN && front == T_EXIT_DOOR)
-        change_map(0, &x, &y, &dir);
-    }
-    prev_keys = keys;
-
 #if DEBUG_HUD
-    show_lamps(frame, keys, moved,
-               ((dx != 0 || dy != 0) && !moved));
+    show_lamps(frame, keys, moved, ((dx != 0 || dy != 0) && !moved));
 #endif
   }
 }
