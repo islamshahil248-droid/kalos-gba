@@ -11,10 +11,7 @@ jobs:
 
       - name: Compile game
         run: |
-          /opt/devkitpro/devkitARM/bin/arm-none-eabi-gcc \
-            -mthumb -mthumb-interwork \
-            -specs=gba.specs -O2 main.c data.c tiles.c world.c
-            render.c -o game.elf
+          /opt/devkitpro/devkitARM/bin/arm-none-eabi-gcc -mthumb -mthumb-interwork -specs=gba.specs -O2 main.c data.c tiles.c world.c render.c -o game.elf
 
           /opt/devkitpro/devkitARM/bin/arm-none-eabi-objcopy \
             -O binary game.elf game.gba
