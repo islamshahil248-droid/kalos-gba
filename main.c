@@ -613,5 +613,26 @@ return;
 // What kind of tile is the trainer looking at, right in front of them?
 // (-1 if that is outside the screen.)
 static int tile_in_front(int px, int py, int dir) {
-int fx, fy;
-if (dir == DIR_UP)        { fx = px + 8;             fy = py + HB_TOP - 2;    
+    int fx, fy;
+
+    if (dir == DIR_UP) {
+        fx = px + 8;
+        fy = py + HB_TOP - 2;
+    } else if (dir == DIR_DOWN) {
+        fx = px + 8;
+        fy = py + HB_BOTTOM + 2;
+    } else if (dir == DIR_LEFT) {
+        fx = px + HB_LEFT - 2;
+        fy = py + 8;
+    } else {
+        fx = px + HB_RIGHT + 2;
+        fy = py + 8;
+    }
+
+    if (fx < 0 || fy < 0 ||
+        fx >= SCREEN_W || fy >= SCREEN_H) {
+        return -1;
+    }
+
+    return map_kind[fy >> 4][fx >> 4];
+}
