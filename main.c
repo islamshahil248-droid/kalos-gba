@@ -1,4 +1,5 @@
-// GBA town with 4 enterable buildings. Mode 3, 240x160, devkitARM, no libraries.
+// GBA town with 4 enterable buildings, NPCs and dialogue.
+// Mode 3, 240x160, devkitARM, no libraries.
 #define REG_DISPCNT  (*(volatile unsigned short*)0x04000000)
 #define REG_VCOUNT   (*(volatile unsigned short*)0x04000006)
 #define REG_KEYINPUT (*(volatile unsigned short*)0x04000130)
@@ -43,11 +44,12 @@ enum {
   TW_ROOF_H1, TW_ROOF_H2, TW_WALL_H, TW_DOOR_H,
   TW_ROOF_C, TW_SIGN_C, TW_WALL_C, TW_DOOR_C,
   TW_ROOF_M, TW_SIGN_M, TW_WALL_M, TW_DOOR_M,
+  TW_NPC_A, TW_NPC_B,                 // townspeople
   MAX_TILES
 };
 // Inside tiles: 0,1 = checker floor, 2 = rug/mat (walkable); 3 and up SOLID.
 enum { IC_FA, IC_FB, IC_MAT, IC_WALL, IC_SIGN, IC_CNT, IC_CNTF, IC_MCH_T,
-       IC_MCH_B, IC_PLANT, IC_DOOR };
+       IC_MCH_B, IC_PLANT, IC_DOOR, IC_NPC };
 enum { IM_FA, IM_FB, IM_MAT, IM_WALL, IM_SIGN, IM_DOOR, IM_CNT, IM_CNTF,
        IM_SHELF_A, IM_SHELF_B, IM_NPC, IM_PLANT };
 enum { H1_FA, H1_FB, H1_RUG, H1_WALL, H1_WIN, H1_DOOR, H1_BED_H, H1_BED_F,
@@ -70,26 +72,34 @@ typedef struct {                     // one door: where it is, where it leads
   unsigned char to, sx, sy, sdir;    // room, tile and facing after using it
 } Door;
 
+typedef struct {                     // one person you can talk to
+  unsigned char room, tx, ty;        // room and tile where they stand
+  unsigned char reach;               // 1 = must be right in front of you,
+                                     // 3 = may stand behind a counter
+  const char* text;                  // what they say (see "People" below)
+} Npc;
+
 // ---------- Town ----------
 // G grass, P path, F flowers, T tree. House: H/J roof, h wall, D door.
 // Center: R roof, r sign, C wall, c door. Mart: U roof, u sign, M wall, m door.
+// n and N are townspeople (they block your way like trees do).
 static const char town_rows[MAP_H][MAP_W + 1] = {
 "TTTTTTTTTTTTTTT",
 "THHHGGRrRGGUuUT",
 "ThDhGFCcCFGMmMT",
 "TGPPPPPPPPPPPGT",
 "TGFGGGPGGGGFGGT",
-"TGTGGGPGGJJJGTT",
+"TGTGGnPGGJJJNTT",
 "TGGGFGPGGhDhGGT",
 "TGTGGGPPPPPGGTT",
 "TGGGFGPGGGGGFGT",
 "TTTTTTPTTTTTTTT"
 };
-static const char town_keys[] = "GPFTHJhDRrCcUuMm";
+static const char town_keys[] = "GPFTHJhDRrCcUuMmnN";
 static const unsigned char town_kinds[] = {
   TW_GRASS, TW_PATH, TW_FLOWER, TW_TREE, TW_ROOF_H1, TW_ROOF_H2, TW_WALL_H,
   TW_DOOR_H, TW_ROOF_C, TW_SIGN_C, TW_WALL_C, TW_DOOR_C, TW_ROOF_M,
-  TW_SIGN_M, TW_WALL_M, TW_DOOR_M
+  TW_SIGN_M, TW_WALL_M, TW_DOOR_M, TW_NPC_A, TW_NPC_B
 };
 
 // ---------- Interiors ----------
@@ -97,11 +107,12 @@ static const unsigned char town_kinds[] = {
 // p plant, n NPC. Row 0 and the side walls are always solid (HUD lamps there).
 // Objects drawn on the floor (p, n, h) must sit where (column+row) is EVEN.
 
-// Pokemon Center: K/k counter top/front, M/N healing machine top/bottom.
+// Pokemon Center: K/k counter top/front, M/N healing machine top/bottom,
+// n nurse behind the counter.
 static const char center_rows[MAP_H][MAP_W + 1] = {
 "WWWWWWWSWWWWWWW",
 "Wp.........MM.W",
-"W..........NN.W",
+"W.....n....NN.W",
 "W..KKKKKKK....W",
 "W..kkkkkkk....W",
 "W.............W",
@@ -110,10 +121,10 @@ static const char center_rows[MAP_H][MAP_W + 1] = {
 "W.....___.....W",
 "WWWWWWWcWWWWWWW"
 };
-static const char center_keys[] = ".pWSKkMN_c";
+static const char center_keys[] = ".pWSKkMN_cn";
 static const unsigned char center_kinds[] = {
   IC_FA, IC_PLANT, IC_WALL, IC_SIGN, IC_CNT, IC_CNTF, IC_MCH_T, IC_MCH_B,
-  IC_MAT, IC_DOOR
+  IC_MAT, IC_DOOR, IC_NPC
 };
 
 // Poke Mart: a/b shelves, K/k counter, shopkeeper n behind the counter.
@@ -186,6 +197,21 @@ static const Door doors[] = {
   { R_HOUSE2, 3, 9, R_TOWN,  10, 7, DIR_DOWN }
 };
 #define NUM_DOORS ((int)(sizeof(doors) / sizeof(doors[0])))
+
+// ---------- People ----------
+// Each person is a solid tile on the map (so nobody can walk through them).
+// This table says who stands where and what they say.
+// Text: '|' starts a new page; long sentences wrap by themselves.
+// Supported: letters, digits and . , ! ? ' " - : ( )
+static const Npc npcs[] = {
+  { R_TOWN,    5, 5, 1, "The tall grass can hide wild Pokemon!" },
+  { R_TOWN,   12, 5, 1, "The POKEMON CENTER on this street heals your team for free." },
+  { R_CENTER,  6, 2, 3, "Welcome to the POKEMON CENTER!|We heal your POKEMON back to perfect health.|We hope to see you again!" },
+  { R_MART,    6, 2, 3, "Hello! Take a look at our supplies.|Come back any time!" },
+  { R_HOUSE1, 11, 3, 1, "Have you been exploring the town?|Be careful out there, and come home soon!" },
+  { R_HOUSE2, 10, 6, 1, "Every great journey begins somewhere.|Take your time and enjoy the road." }
+};
+#define NUM_NPCS ((int)(sizeof(npcs) / sizeof(npcs[0])))
 
 // ---------- Trainer art ----------
 // Sprite colors: K outline, B cap, S skin, H hair, Y shirt, J jeans, R shoes
@@ -267,7 +293,7 @@ static const char art_tree[16][17] = {
 static const char glyph_p[] = "XXXX.X...XX...XXXXX.X....X....X....";
 static const char glyph_m[] = "X...XXX.XXX.X.XX...XX...XX...XX...X";
 
-// ---------- Memory (about 12 KB in total) ----------
+// ---------- Memory (about 14 KB in total) ----------
 static unsigned short tile_gfx[MAX_TILES][TILE * TILE];   // current room only
 static unsigned short sprite_gfx[4][2][TILE * TILE];
 static unsigned char map_kind[NUM_ROOMS][MAP_H][MAP_W];
@@ -349,6 +375,16 @@ static void make_floor(unsigned short* t, unsigned short base,
 
 static void add_window(unsigned short* t, unsigned short frame) {
   tile_box(t, 3, 2, 13, 12, frame);
+  tile_box(t, 4, 3, 12, 11, RGB15(14, 24, 31));
+  tile_box(t, 7, 3, 9, 11, frame);
+  tile_box(t, 4, 6, 12, 8, frame);
+  t[4 * TILE + 5] = WHITE;
+  t[4 * TILE + 10] = WHITE;
+}
+
+static void add_door(unsigned short* t, unsigned short door,
+                     unsigned short frame) {
+  tile_box(t, 2, 1, 14, TILE, frame);
   tile_box(t, 4, 3, 12, 11, RGB15(14, 24, 31));
   tile_box(t, 7, 3, 9, 11, frame);
   tile_box(t, 4, 6, 12, 8, frame);
@@ -556,6 +592,12 @@ static void build_town(void) {
   add_window(tile_gfx[TW_WALL_M], RGB15(4, 6, 14));
   make_door_tile(tile_gfx[TW_DOOR_M], RGB15(24, 28, 31), RGB15(19, 23, 28),
                  RGB15(10, 18, 28), RGB15(4, 6, 14), 1);
+
+  // Townspeople (they stand on grass: make_npc copies tile 0 = grass)
+  make_npc(tile_gfx[TW_NPC_A], RGB15(12, 7, 3), RGB15(31, 18, 6),
+           RGB15(6, 9, 20), RGB15(5, 20, 8));          // boy: green cap
+  make_npc(tile_gfx[TW_NPC_B], RGB15(24, 22, 28), RGB15(20, 10, 26),
+           RGB15(9, 8, 16), CLEAR);                    // woman: purple top
 }
 
 static void build_center(void) {
@@ -582,6 +624,13 @@ static void build_center(void) {
   tile_box(tile_gfx[IC_MCH_B], 3, 4, 5, 5, WHITE);
   tile_box(tile_gfx[IC_MCH_B], 11, 4, 13, 5, WHITE);
   make_plant(tile_gfx[IC_PLANT]);
+  // Nurse: white cap with a red cross, pink hair at the sides
+  make_npc(tile_gfx[IC_NPC], RGB15(31, 18, 24), RGB15(31, 25, 27),
+           RGB15(30, 22, 26), WHITE);
+  tile_box(tile_gfx[IC_NPC], 3, 3, 5, 7, RGB15(31, 18, 24));
+  tile_box(tile_gfx[IC_NPC], 11, 3, 13, 7, RGB15(31, 18, 24));
+  tile_box(tile_gfx[IC_NPC], 7, 1, 9, 4, RGB15(27, 5, 7));
+  tile_box(tile_gfx[IC_NPC], 6, 2, 10, 3, RGB15(27, 5, 7));
 }
 
 static void build_mart(void) {
@@ -804,6 +853,269 @@ static void pick_start(int stx, int sty, int* out_x, int* out_y) {
   }
 }
 
+// ---------- Talking to people ----------
+// Index of the person standing on this tile of the current room, or -1.
+static int npc_at(int tx, int ty) {
+  int i;
+  for (i = 0; i < NUM_NPCS; i++)
+    if (npcs[i].room == cur_room && npcs[i].tx == tx && npcs[i].ty == ty)
+      return i;
+  return -1;
+}
+
+// Look from pixel (ax, ay) in direction (dx, dy), tile by tile. A person
+// counts if they are within their "reach"; we only look further through
+// SOLID tiles (a counter), never across open floor.
+static int npc_ahead(int ax, int ay, int dx, int dy) {
+  int tx, ty, step, i;
+  if (ax < 0 || ay < 0 || ax >= SCREEN_W || ay >= SCREEN_H) return -1;
+  tx = ax >> 4;
+  ty = ay >> 4;
+  for (step = 1; step <= 3; step++) {
+    i = npc_at(tx, ty);
+    if (i >= 0) return (step <= npcs[i].reach) ? i : -1;
+    if (map_kind[cur_room][ty][tx] < rooms[cur_room].solid_from) return -1;
+    tx += dx;
+    ty += dy;
+    if (tx < 0 || ty < 0 || tx >= MAP_W || ty >= MAP_H) return -1;
+  }
+  return -1;
+}
+
+// The person right in front of the trainer (within 3 px), or -1.
+// Same two probe points as front_door.
+static int front_npc(int x, int y, int dir) {
+  int ax, ay, bx, by, dx = 0, dy = 0, i;
+  if (dir == DIR_UP)        { ay = by = y + HB_TOP - 3;    ax = x + HB_LEFT + 2; bx = x + HB_RIGHT - 2; dy = -1; }
+  else if (dir == DIR_DOWN) { ay = by = y + HB_BOTTOM + 3; ax = x + HB_LEFT + 2; bx = x + HB_RIGHT - 2; dy = 1; }
+  else if (dir == DIR_LEFT) { ax = bx = x + HB_LEFT - 3;   ay = y + HB_TOP + 2;  by = y + HB_BOTTOM - 2; dx = -1; }
+  else                      { ax = bx = x + HB_RIGHT + 3;  ay = y + HB_TOP + 2;  by = y + HB_BOTTOM - 2; dx = 1; }
+  i = npc_ahead(ax, ay, dx, dy);
+  if (i < 0) i = npc_ahead(bx, by, dx, dy);
+  return i;
+}
+
+// ---------- Dialogue box ----------
+#define DLG_X      8        // the box: 224 x 40 pixels at the bottom
+#define DLG_Y      112
+#define DLG_W      224
+#define DLG_H      40
+#define DLG_COLS   34       // characters per line (6 pixels each = 204)
+#define DLG_LINES  2        // lines per page
+#define DLG_PAPER  RGB15(31, 31, 29)
+#define DLG_INK    RGB15(3, 3, 6)
+#define DLG_SHADOW RGB15(20, 20, 23)
+
+// 5x8 pixel letters for ASCII 32 (space) to 122 (z). Each letter is 5
+// columns; in a column, bit 0 is the top pixel. Unused symbols are blank.
+static const unsigned char font5x8[91][5] = {
+  { 0x00, 0x00, 0x00, 0x00, 0x00 },  /* space */
+  { 0x00, 0x00, 0x5F, 0x00, 0x00 },  /* punctuation 0x21 */
+  { 0x00, 0x07, 0x00, 0x07, 0x00 },  /* punctuation 0x22 */
+  { 0x00, 0x00, 0x00, 0x00, 0x00 },  /* unused */
+  { 0x00, 0x00, 0x00, 0x00, 0x00 },  /* unused */
+  { 0x00, 0x00, 0x00, 0x00, 0x00 },  /* unused */
+  { 0x00, 0x00, 0x00, 0x00, 0x00 },  /* unused */
+  { 0x00, 0x05, 0x03, 0x00, 0x00 },  /* punctuation 0x27 */
+  { 0x00, 0x1C, 0x22, 0x41, 0x00 },  /* punctuation 0x28 */
+  { 0x00, 0x41, 0x22, 0x1C, 0x00 },  /* punctuation 0x29 */
+  { 0x00, 0x00, 0x00, 0x00, 0x00 },  /* unused */
+  { 0x00, 0x00, 0x00, 0x00, 0x00 },  /* unused */
+  { 0x00, 0x50, 0x30, 0x00, 0x00 },  /* punctuation 0x2C */
+  { 0x08, 0x08, 0x08, 0x08, 0x08 },  /* punctuation 0x2D */
+  { 0x00, 0x60, 0x60, 0x00, 0x00 },  /* punctuation 0x2E */
+  { 0x00, 0x00, 0x00, 0x00, 0x00 },  /* unused */
+  { 0x3E, 0x51, 0x49, 0x45, 0x3E },  /* 0 */
+  { 0x00, 0x42, 0x7F, 0x40, 0x00 },  /* 1 */
+  { 0x42, 0x61, 0x51, 0x49, 0x46 },  /* 2 */
+  { 0x21, 0x41, 0x45, 0x4B, 0x31 },  /* 3 */
+  { 0x18, 0x14, 0x12, 0x7F, 0x10 },  /* 4 */
+  { 0x27, 0x45, 0x45, 0x45, 0x39 },  /* 5 */
+  { 0x3C, 0x4A, 0x49, 0x49, 0x30 },  /* 6 */
+  { 0x01, 0x71, 0x09, 0x05, 0x03 },  /* 7 */
+  { 0x36, 0x49, 0x49, 0x49, 0x36 },  /* 8 */
+  { 0x06, 0x49, 0x49, 0x29, 0x1E },  /* 9 */
+  { 0x00, 0x36, 0x36, 0x00, 0x00 },  /* punctuation 0x3A */
+  { 0x00, 0x00, 0x00, 0x00, 0x00 },  /* unused */
+  { 0x00, 0x00, 0x00, 0x00, 0x00 },  /* unused */
+  { 0x00, 0x00, 0x00, 0x00, 0x00 },  /* unused */
+  { 0x00, 0x00, 0x00, 0x00, 0x00 },  /* unused */
+  { 0x02, 0x01, 0x51, 0x09, 0x06 },  /* punctuation 0x3F */
+  { 0x00, 0x00, 0x00, 0x00, 0x00 },  /* unused */
+  { 0x7E, 0x11, 0x11, 0x11, 0x7E },  /* A */
+  { 0x7F, 0x49, 0x49, 0x49, 0x36 },  /* B */
+  { 0x3E, 0x41, 0x41, 0x41, 0x22 },  /* C */
+  { 0x7F, 0x41, 0x41, 0x22, 0x1C },  /* D */
+  { 0x7F, 0x49, 0x49, 0x49, 0x41 },  /* E */
+  { 0x7F, 0x09, 0x09, 0x09, 0x01 },  /* F */
+  { 0x3E, 0x41, 0x41, 0x51, 0x32 },  /* G */
+  { 0x7F, 0x08, 0x08, 0x08, 0x7F },  /* H */
+  { 0x00, 0x41, 0x7F, 0x41, 0x00 },  /* I */
+  { 0x20, 0x40, 0x41, 0x3F, 0x01 },  /* J */
+  { 0x7F, 0x08, 0x14, 0x22, 0x41 },  /* K */
+  { 0x7F, 0x40, 0x40, 0x40, 0x40 },  /* L */
+  { 0x7F, 0x02, 0x0C, 0x02, 0x7F },  /* M */
+  { 0x7F, 0x04, 0x08, 0x10, 0x7F },  /* N */
+  { 0x3E, 0x41, 0x41, 0x41, 0x3E },  /* O */
+  { 0x7F, 0x09, 0x09, 0x09, 0x06 },  /* P */
+  { 0x3E, 0x41, 0x51, 0x21, 0x5E },  /* Q */
+  { 0x7F, 0x09, 0x19, 0x29, 0x46 },  /* R */
+  { 0x46, 0x49, 0x49, 0x49, 0x31 },  /* S */
+  { 0x01, 0x01, 0x7F, 0x01, 0x01 },  /* T */
+  { 0x3F, 0x40, 0x40, 0x40, 0x3F },  /* U */
+  { 0x1F, 0x20, 0x40, 0x20, 0x1F },  /* V */
+  { 0x3F, 0x40, 0x38, 0x40, 0x3F },  /* W */
+  { 0x63, 0x14, 0x08, 0x14, 0x63 },  /* X */
+  { 0x07, 0x08, 0x70, 0x08, 0x07 },  /* Y */
+  { 0x61, 0x51, 0x49, 0x45, 0x43 },  /* Z */
+  { 0x00, 0x00, 0x00, 0x00, 0x00 },  /* unused */
+  { 0x00, 0x00, 0x00, 0x00, 0x00 },  /* unused */
+  { 0x00, 0x00, 0x00, 0x00, 0x00 },  /* unused */
+  { 0x00, 0x00, 0x00, 0x00, 0x00 },  /* unused */
+  { 0x00, 0x00, 0x00, 0x00, 0x00 },  /* unused */
+  { 0x00, 0x00, 0x00, 0x00, 0x00 },  /* unused */
+  { 0x20, 0x54, 0x54, 0x54, 0x78 },  /* a */
+  { 0x7F, 0x48, 0x44, 0x44, 0x38 },  /* b */
+  { 0x38, 0x44, 0x44, 0x44, 0x20 },  /* c */
+  { 0x38, 0x44, 0x44, 0x48, 0x7F },  /* d */
+  { 0x38, 0x54, 0x54, 0x54, 0x18 },  /* e */
+  { 0x08, 0x7E, 0x09, 0x01, 0x02 },  /* f */
+  { 0x18, 0xA4, 0xA4, 0xA4, 0x78 },  /* g */
+  { 0x7F, 0x08, 0x04, 0x04, 0x78 },  /* h */
+  { 0x00, 0x44, 0x7D, 0x40, 0x00 },  /* i */
+  { 0x00, 0x80, 0x80, 0xFD, 0x00 },  /* j */
+  { 0x7F, 0x10, 0x28, 0x44, 0x00 },  /* k */
+  { 0x00, 0x41, 0x7F, 0x40, 0x00 },  /* l */
+  { 0x7C, 0x04, 0x18, 0x04, 0x78 },  /* m */
+  { 0x7C, 0x08, 0x04, 0x04, 0x78 },  /* n */
+  { 0x38, 0x44, 0x44, 0x44, 0x38 },  /* o */
+  { 0xFC, 0x24, 0x24, 0x24, 0x18 },  /* p */
+  { 0x18, 0x24, 0x24, 0x24, 0xFC },  /* q */
+  { 0x7C, 0x08, 0x04, 0x04, 0x08 },  /* r */
+  { 0x48, 0x54, 0x54, 0x54, 0x20 },  /* s */
+  { 0x04, 0x3F, 0x44, 0x40, 0x20 },  /* t */
+  { 0x3C, 0x40, 0x40, 0x20, 0x7C },  /* u */
+  { 0x1C, 0x20, 0x40, 0x20, 0x1C },  /* v */
+  { 0x3C, 0x40, 0x30, 0x40, 0x3C },  /* w */
+  { 0x44, 0x28, 0x10, 0x28, 0x44 },  /* x */
+  { 0x1C, 0xA0, 0xA0, 0xA0, 0x7C },  /* y */
+  { 0x44, 0x64, 0x54, 0x4C, 0x44 },  /* z */
+};
+
+static int dlg_open = 0;                    // 1 while the box is on screen
+static const char* dlg_text = 0;            // the whole text being shown (set when a box opens)
+static int dlg_pos = 0;                     // where the current page starts
+static int dlg_next = 0;                    // where the next page starts
+static char dlg_lines[DLG_LINES][DLG_COLS + 1];
+
+// Work out the current page: fill dlg_lines (word-wrapped) and find where
+// the next page starts. Never writes past DLG_COLS characters per line.
+static void dlg_layout(void) {
+  int p = dlg_pos, line, col, len, k;
+  for (line = 0; line < DLG_LINES; line++) dlg_lines[line][0] = '\0';
+  line = 0;
+  while (line < DLG_LINES) {
+    while (dlg_text[p] == ' ') p++;                  // no spaces at the start of a line
+    if (dlg_text[p] == '\0') break;                  // end of the text
+    if (dlg_text[p] == '|') {                        // forced new page
+      p++;
+      if (line > 0) break;
+      continue;
+    }
+    col = 0;
+    while (dlg_text[p] != '\0' && dlg_text[p] != '|') {
+      len = 0;
+      while (dlg_text[p + len] != ' ' && dlg_text[p + len] != '\0' &&
+             dlg_text[p + len] != '|') len++;
+      if (col > 0 && col + 1 + len > DLG_COLS) break;   // word does not fit: next line
+      if (col > 0) dlg_lines[line][col++] = ' ';
+      if (len > DLG_COLS - col) len = DLG_COLS - col;   // a giant word is cut
+      for (k = 0; k < len; k++) dlg_lines[line][col++] = dlg_text[p + k];
+      p += len;
+      while (dlg_text[p] == ' ') p++;
+      if (col >= DLG_COLS) break;
+    }
+    dlg_lines[line][col] = '\0';
+    line++;
+  }
+  dlg_next = p;
+}
+
+// Is there another page after the current one?
+static int dlg_has_more(void) {
+  int p = dlg_next;
+  while (dlg_text[p] == ' ' || dlg_text[p] == '|') p++;
+  return dlg_text[p] != '\0';
+}
+
+// Fill a rectangle of the screen (x1/y1 not included). Callers keep it on screen.
+static void fill_rect(int x0, int y0, int x1, int y1, unsigned short c) {
+  int x, y;
+  for (y = y0; y < y1; y++)
+    for (x = x0; x < x1; x++)
+      VRAM[y * SCREEN_W + x] = c;
+}
+
+// Draw one letter's lit pixels.
+static void draw_glyph(int x, int y, char ch, unsigned short color) {
+  int col, row;
+  const unsigned char* g;
+  if (ch < ' ' || ch > 'z') ch = '?';
+  g = font5x8[ch - ' '];
+  for (col = 0; col < 5; col++)
+    for (row = 0; row < 8; row++)
+      if (g[col] & (1 << row))
+        VRAM[(y + row) * SCREEN_W + x + col] = color;
+}
+
+// A line of text with a soft shadow (shadow first, so it never covers letters).
+static void draw_line(int x, int y, const char* str) {
+  int i;
+  for (i = 0; str[i]; i++) draw_glyph(x + i * 6 + 1, y + 1, str[i], DLG_SHADOW);
+  for (i = 0; str[i]; i++) draw_glyph(x + i * 6,     y,     str[i], DLG_INK);
+}
+
+// Redraw the text area of the box for the current page.
+static void draw_dialog_text(void) {
+  int i, ax = DLG_X + DLG_W - 14, ay = DLG_Y + DLG_H - 10;
+  fill_rect(DLG_X + 4, DLG_Y + 4, DLG_X + DLG_W - 4, DLG_Y + DLG_H - 4, DLG_PAPER);
+  for (i = 0; i < DLG_LINES; i++)
+    draw_line(DLG_X + 10, DLG_Y + 8 + i * 13, dlg_lines[i]);
+  if (dlg_has_more()) {                              // little "more" arrow
+    fill_rect(ax,     ay,     ax + 7, ay + 1, DLG_INK);
+    fill_rect(ax + 1, ay + 1, ax + 6, ay + 2, DLG_INK);
+    fill_rect(ax + 2, ay + 2, ax + 5, ay + 3, DLG_INK);
+    fill_rect(ax + 3, ay + 3, ax + 4, ay + 4, DLG_INK);
+  }
+}
+
+// Start talking to person number n.
+static void dialog_open(int n) {
+  dlg_text = npcs[n].text;
+  dlg_pos = 0;
+  dlg_layout();
+  fill_rect(DLG_X, DLG_Y, DLG_X + DLG_W, DLG_Y + DLG_H, OUTLINE);
+  fill_rect(DLG_X + 1, DLG_Y + 1, DLG_X + DLG_W - 1, DLG_Y + DLG_H - 1,
+            RGB15(12, 16, 26));
+  draw_dialog_text();
+  dlg_open = 1;
+}
+
+// A pressed while talking: next page, or close the box and repaint what was
+// under it (the map, with the trainer on top).
+static void dialog_advance(int x, int y, int dir) {
+  if (dlg_has_more()) {
+    dlg_pos = dlg_next;
+    dlg_layout();
+    draw_dialog_text();
+  } else {
+    dlg_open = 0;
+    walk_frame = 0;
+    walk_timer = 0;
+    paint_box(DLG_X, DLG_Y, DLG_X + DLG_W, DLG_Y + DLG_H, x, y, dir);
+  }
+}
+
 #if DEBUG_HUD
 // Lamps live in the top row (always solid), where the trainer can't walk.
 static void lamp(int slot, int on, unsigned short color) {
@@ -814,7 +1126,8 @@ static void lamp(int slot, int on, unsigned short color) {
       VRAM[y * SCREEN_W + x] = on ? color : RGB15(4, 4, 4);
 }
 
-// 0 blinks = loop runs; 1-4 = LEFT/RIGHT/UP/DOWN; 5 = moved; 6 = blocked
+// 0 blinks = loop runs; 1-4 = LEFT/RIGHT/UP/DOWN; 5 = moved; 6 = blocked;
+// 7 (orange) = a dialogue box is open
 static void show_lamps(unsigned int frame, unsigned short keys,
                        int moved, int blocked) {
   lamp(0, (frame >> 5) & 1, RGB15(31, 0, 31));
@@ -824,6 +1137,7 @@ static void show_lamps(unsigned int frame, unsigned short keys,
   lamp(4, keys & KEY_DOWN,  RGB15(0, 31, 31));
   lamp(5, moved,            RGB15(31, 31, 31));
   lamp(6, blocked,          RGB15(31, 0, 0));
+  lamp(7, dlg_open,         RGB15(31, 20, 0));
 }
 #endif
 
@@ -851,13 +1165,35 @@ int main(void) {
     int old_x = x, old_y = y, old_dir = dir;
     int old_walk_frame = walk_frame;
     int dx = 0, dy = 0;
-    int moved, door;
+    int moved, door, npc, a_press;
     wait_vblank();
     frame++;
     keys = (unsigned short)(~REG_KEYINPUT) & 0x03FF;
 
-    // A button: only on the press (not while held), only facing a door.
-    door = ((keys & KEY_A) && !(prev_keys & KEY_A)) ? front_door(x, y, dir) : -1;
+    // A counts only on the press (not while held).
+    a_press = (keys & KEY_A) && !(prev_keys & KEY_A);
+
+    // While a dialogue box is open, A flips the page and nothing else moves.
+    if (dlg_open) {
+      prev_keys = keys;
+      if (a_press) dialog_advance(x, y, dir);
+#if DEBUG_HUD
+      show_lamps(frame, keys, 0, 0);
+#endif
+      continue;
+    }
+
+    // A button: a door in front of us first, then a person.
+    door = a_press ? front_door(x, y, dir) : -1;
+    npc  = (a_press && door < 0) ? front_npc(x, y, dir) : -1;
+    if (npc >= 0) {
+      prev_keys = keys;
+      walk_frame = 0;                   // stand still while talking
+      walk_timer = 0;
+      paint_box(x, y, x + TILE, y + TILE, x, y, dir);
+      dialog_open(npc);
+      continue;
+    }
     if (door >= 0) {
       cur_room = doors[door].to;
       rooms[cur_room].build();          // this room's pictures
