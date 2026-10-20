@@ -95,6 +95,7 @@ int main(void) {
       walk_frame = 0;                   // stand still while talking
       walk_timer = 0;
       paint_box(x, y, x + TILE, y + TILE, x, y, dir);
+      if (npcs[npc].heals) heal_party();   // the nurse heals PIKACHU
       dialog_open(npc);
       continue;
     }
