@@ -1,4 +1,5 @@
-// GBA town with 4 enterable buildings, NPCs and dialogue.
+// GBA town with 4 enterable buildings, NPCs, dialogue, Route 1 and
+// wild POKEMON encounters.
 // Mode 3, 240x160, devkitARM, no libraries.
 //
 // game.h - shared by every .c file: constants, types, and the list of what
@@ -43,7 +44,7 @@
 
 // Rooms. Each room has its OWN tile numbers (0 = first tile of that room)
 // and only the current room's pictures are kept in memory.
-enum { R_TOWN, R_CENTER, R_MART, R_HOUSE1, R_HOUSE2, NUM_ROOMS };
+enum { R_TOWN, R_CENTER, R_MART, R_HOUSE1, R_HOUSE2, R_ROUTE1, NUM_ROOMS };
 
 // Town tiles (3 and up are SOLID). MAX_TILES = biggest tile set of any room.
 enum {
@@ -64,6 +65,19 @@ enum { H1_FA, H1_FB, H1_RUG, H1_WALL, H1_WIN, H1_DOOR, H1_BED_H, H1_BED_F,
 enum { H2_FA, H2_FB, H2_RUG, H2_WALL, H2_WIN, H2_DOOR, H2_SHELF_A, H2_SHELF_B,
        H2_BED_H, H2_BED_F, H2_TABLE, H2_CHAIR, H2_PLANT, H2_NPC };
 #define SOLID_INSIDE 3
+// Route 1 tiles. 0-2 are the SAME pictures as the town's grass, path and
+// flowers (build_route1 calls build_town first). 3 = tall grass: you can walk
+// on it and wild POKEMON can appear there. 4 and up are SOLID.
+enum { RT_GRASS, RT_PATH, RT_FLOWER, RT_TALL, RT_TREE, RT_SIGN };
+
+#define NO_TILE 255           // "this room has no such tile"
+
+// Wild POKEMON. Species numbers (index into species[] in data.c).
+enum { SP_PIDGEY, SP_RATTATA, SP_CATERPIE, NUM_SPECIES };
+
+// After an encounter, this many tall-grass steps are safe (no new encounter).
+// The chance per step lives in zones[] in data.c.
+#define ENC_COOLDOWN_STEPS 3
 
 typedef struct {
   const char (*rows)[MAP_W + 1];     // the map letters
@@ -71,6 +85,7 @@ typedef struct {
   const unsigned char* kinds;        // ... and the tile each one means
   unsigned char solid_from;          // tile numbers >= this block you
   unsigned char checker;             // 1: '.' alternates tile 0 / tile 1
+  unsigned char tall;                // tile number of tall grass (NO_TILE = none)
   void (*build)(void);               // paints this room's tile pictures
 } Room;
 
@@ -86,15 +101,41 @@ typedef struct {                     // one person you can talk to
   const char* text;                  // what they say (see "People" below)
 } Npc;
 
+typedef struct {                     // one kind of wild POKEMON
+  const char* name;
+  unsigned short body, accent;       // colors of the 'B' and 'A' pixels below
+  const char* art;                   // placeholder picture: 8x8 = 64 letters
+} Species;
+
+typedef struct {                     // one line of an encounter table
+  unsigned char species;             // SP_...
+  unsigned char weight;              // bigger = more common
+} WildEntry;
+
+typedef struct {                     // the wild POKEMON of one room
+  unsigned char room;
+  unsigned char percent;             // chance (0-100) per NEW tall-grass tile
+  unsigned char count;               // how many entries
+  const WildEntry* entries;
+} Zone;
+
 // Counts come from data.c (so adding a door or person needs no edit here).
+// "Warps" are exits you trigger by WALKING onto the tile (same type as Door).
 #define NUM_DOORS num_doors
 #define NUM_NPCS  num_npcs
+#define NUM_WARPS num_warps
+#define NUM_ZONES num_zones
 
 // ===== Shared between files =====
 // data.c: tables (rooms, doors, people)
 extern const int num_doors;
 extern const int num_npcs;
+extern const int num_warps;
+extern const int num_zones;
 extern const Door doors[];
+extern const Door warps[];
+extern const Species species[NUM_SPECIES];
+extern const Zone zones[];
 extern const Npc npcs[];
 extern const Room rooms[NUM_ROOMS];
 
@@ -114,6 +155,7 @@ extern unsigned char map_kind[NUM_ROOMS][MAP_H][MAP_W];
 extern int cur_room;
 extern int walk_frame;
 extern int walk_timer;
+extern int wild_species;   // species of the current wild encounter (SP_...), -1 = none
 
 // tiles.c: paint the pictures
 void build_town(void);
@@ -121,6 +163,7 @@ void build_center(void);
 void build_mart(void);
 void build_house1(void);
 void build_house2(void);
+void build_route1(void);
 void build_sprites(void);
 
 // world.c: map, collision, doors, people
@@ -129,6 +172,10 @@ int can_stand(int px, int py);
 int front_door(int x, int y, int dir);
 int front_npc(int x, int y, int dir);
 void pick_start(int stx, int sty, int* out_x, int* out_y);
+int warp_at_feet(int x, int y);        // warp the trainer is standing on, or -1
+void steps_reset(int x, int y);        // call when arriving in a room
+int step_encounter(int x, int y);      // new tall-grass step: species or -1
+void rng_stir(unsigned int v);         // mix in a number (call every frame)
 
 // render.c: drawing and dialogue
 void paint_box(int left, int top, int right, int bottom, int px, int py, int dir);
@@ -136,8 +183,11 @@ void wait_vblank(void);
 void show_map(int x, int y, int dir);
 void dialog_open(int n);
 void dialog_advance(int x, int y, int dir);
+void encounter_start(int sp);                    // show the wild encounter screen
+void encounter_advance(int x, int y, int dir);   // A pressed on that screen
 
 extern int dlg_open;   // render.c: 1 while a dialogue box is on screen
+extern int enc_open;   // render.c: 1 while the wild encounter screen is showing
 
 #if DEBUG_HUD
 void lamp(int slot, int on, unsigned short color);
