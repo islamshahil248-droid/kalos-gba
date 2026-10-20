@@ -121,6 +121,7 @@ typedef struct {                     // one person you can talk to
   unsigned char reach;               // 1 = must be right in front of you,
                                      // 3 = may stand behind a counter
   const char* text;                  // what they say (see "People" below)
+  unsigned char heals;               // 1 = talking to them heals your POKEMON
 } Npc;
 
 typedef struct {                     // one kind of wild POKEMON
@@ -222,6 +223,7 @@ void pick_start(int stx, int sty, int* out_x, int* out_y);
 int warp_at_feet(int x, int y);        // warp the trainer is standing on, or -1
 void steps_reset(int x, int y);        // call when arriving in a room
 int step_encounter(int x, int y);      // new tall-grass step: species or -1
+void heal_party(void);                 // PIKACHU back to full HP (nurse, fainting)
 void rng_stir(unsigned int v);         // mix in a number (call every frame)
 void battle_begin(int sp);             // set up a fight against wild species sp
 int battle_input(unsigned short pressed);   // buttons pressed this frame ->
