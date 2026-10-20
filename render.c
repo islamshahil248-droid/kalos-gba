@@ -138,15 +138,20 @@ static void draw_dialog_text(void) {
   }
 }
 
-// Start talking to person number n.
-void dialog_open(int n) {
-  dlg_text = npcs[n].text;
+// Draw the box with the first page of a text (used by people and encounters).
+static void dlg_show(const char* text) {
+  dlg_text = text;
   dlg_pos = 0;
   dlg_layout();
   fill_rect(DLG_X, DLG_Y, DLG_X + DLG_W, DLG_Y + DLG_H, OUTLINE);
   fill_rect(DLG_X + 1, DLG_Y + 1, DLG_X + DLG_W - 1, DLG_Y + DLG_H - 1,
             RGB15(12, 16, 26));
   draw_dialog_text();
+}
+
+// Start talking to person number n.
+void dialog_open(int n) {
+  dlg_show(npcs[n].text);
   dlg_open = 1;
 }
 
@@ -165,6 +170,96 @@ void dialog_advance(int x, int y, int dir) {
   }
 }
 
+// ---------- Wild encounter screen ----------
+// A simple scene (sky, grass, two platforms), a placeholder picture of the
+// wild POKEMON, the trainer seen from behind, and the dialogue box below.
+// Drawn under forced blank like show_map. A closes it and repaints the map.
+int enc_open = 0;                      // 1 while the encounter screen is showing
+static char enc_text[96];              // "A wild NAME appeared!|..." (box text)
+
+// Copy s to buf at position n (never past the end); returns the new position.
+static int enc_put(int n, const char* s) {
+  while (*s && n < (int)sizeof(enc_text) - 1) enc_text[n++] = *s++;
+  enc_text[n] = '\0';
+  return n;
+}
+
+// The 8x8 placeholder picture of species sp at 4x size (32x32 pixels).
+static void draw_species(int sp, int x0, int y0) {
+  const Species* s = &species[sp];
+  int cx, cy;
+  for (cy = 0; cy < 8; cy++) {
+    for (cx = 0; cx < 8; cx++) {
+      char c = s->art[cy * 8 + cx];
+      int x = x0 + cx * 4, y = y0 + cy * 4;
+      if (c == 'B')      fill_rect(x, y, x + 4, y + 4, s->body);
+      else if (c == 'A') fill_rect(x, y, x + 4, y + 4, s->accent);
+      else if (c == 'K') fill_rect(x, y, x + 4, y + 4, OUTLINE);
+      else if (c == 'Y') fill_rect(x, y, x + 4, y + 4, RGB15(31, 22, 5));
+      else if (c == 'E') {
+        fill_rect(x, y, x + 4, y + 4, WHITE);
+        fill_rect(x + 1, y + 1, x + 3, y + 3, OUTLINE);
+      }
+    }
+  }
+}
+
+// The trainer's back view (the existing sprite) at 3x size (48x48 pixels).
+static void draw_trainer_back(int x0, int y0) {
+  int sx, sy;
+  for (sy = 0; sy < TILE; sy++)
+    for (sx = 0; sx < TILE; sx++) {
+      unsigned short c = sprite_gfx[DIR_UP][0][sy * TILE + sx];
+      if (c != CLEAR)
+        fill_rect(x0 + sx * 3, y0 + sy * 3, x0 + sx * 3 + 3, y0 + sy * 3 + 3, c);
+    }
+}
+
+static void draw_wild_scene(int sp) {
+  fill_rect(0, 0, SCREEN_W, 28, RGB15(17, 25, 31));              // sky
+  fill_rect(0, 28, SCREEN_W, 64, RGB15(22, 29, 31));
+  fill_rect(0, 64, SCREEN_W, SCREEN_H, RGB15(11, 24, 8));        // grass
+  fill_rect(0, 82, SCREEN_W, 84, RGB15(13, 27, 10));
+  fill_rect(0, 98, SCREEN_W, 100, RGB15(13, 27, 10));
+  fill_rect(140, 66, 212, 68, RGB15(14, 29, 11));                // their platform
+  fill_rect(134, 68, 218, 72, RGB15(9, 20, 7));
+  fill_rect(142, 72, 210, 74, RGB15(6, 14, 5));
+  fill_rect(20, 102, 92, 105, RGB15(14, 29, 11));                // our platform
+  fill_rect(12, 105, 100, 109, RGB15(9, 20, 7));
+  fill_rect(22, 109, 90, 111, RGB15(6, 14, 5));
+  draw_species(sp, 160, 32);
+  draw_trainer_back(36, 54);
+}
+
+// Show "A wild NAME appeared!" on the encounter screen.
+void encounter_start(int sp) {
+  int n;
+  if (sp < 0 || sp >= NUM_SPECIES) return;
+  n = enc_put(0, "A wild ");
+  n = enc_put(n, species[sp].name);
+  n = enc_put(n, " appeared!|Battles are not ready yet. Press A to return to the route.");
+  wait_vblank();
+  REG_DISPCNT = 0x0080;
+  draw_wild_scene(sp);
+  dlg_show(enc_text);
+  REG_DISPCNT = 0x0403;
+  enc_open = 1;
+}
+
+// A pressed on the encounter screen: next page, or back to the route.
+void encounter_advance(int x, int y, int dir) {
+  if (dlg_has_more()) {
+    dlg_pos = dlg_next;
+    dlg_layout();
+    draw_dialog_text();
+  } else {
+    enc_open = 0;
+    walk_frame = 0;
+    walk_timer = 0;
+    show_map(x, y, dir);
+  }
+}
+
 #if DEBUG_HUD
 // Lamps live in the top row (always solid), where the trainer can't walk.
 void lamp(int slot, int on, unsigned short color) {
@@ -176,7 +271,7 @@ void lamp(int slot, int on, unsigned short color) {
 }
 
 // 0 blinks = loop runs; 1-4 = LEFT/RIGHT/UP/DOWN; 5 = moved; 6 = blocked;
-// 7 (orange) = a dialogue box is open
+// 7 (orange) = a dialogue box or the encounter screen is open
 void show_lamps(unsigned int frame, unsigned short keys,
                        int moved, int blocked) {
   lamp(0, (frame >> 5) & 1, RGB15(31, 0, 31));
@@ -186,7 +281,7 @@ void show_lamps(unsigned int frame, unsigned short keys,
   lamp(4, keys & KEY_DOWN,  RGB15(0, 31, 31));
   lamp(5, moved,            RGB15(31, 31, 31));
   lamp(6, blocked,          RGB15(31, 0, 0));
-  lamp(7, dlg_open,         RGB15(31, 20, 0));
+  lamp(7, dlg_open || enc_open, RGB15(31, 20, 0));
 }
 #endif
 // END OF render.c
