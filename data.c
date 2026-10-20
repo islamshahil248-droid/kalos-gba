@@ -175,11 +175,28 @@ const int num_npcs = (int)(sizeof(npcs) / sizeof(npcs[0]));
 // Order must match the SP_ numbers in game.h.
 const Species species[NUM_SPECIES] = {
   { "Pidgey",   RGB15(18, 12, 6),  RGB15(30, 26, 19),
-    "..KKKK.." ".KBBBBK." "KBBEBBBK" "KBBBBYYK" "KAABBBBK" ".KAAAAK." "..KYYK.." "..K..K.." },
+    "..KKKK.." ".KBBBBK." "KBBEBBBK" "KBBBBYYK" "KAABBBBK" ".KAAAAK." "..KYYK.." "..K..K..",
+    6, MV_GUST },
   { "Rattata",  RGB15(17, 9, 21),  RGB15(30, 26, 22),
-    ".KK..KK." "KBBKKBBK" "KBBBBBBK" "KBEBBEBK" "KBBBBBBK" "KBBAABBK" ".KBBBBK." "..KKKK.." },
+    ".KK..KK." "KBBKKBBK" "KBBBBBBK" "KBEBBEBK" "KBBBBBBK" "KBBAABBK" ".KBBBBK." "..KKKK..",
+    5, MV_TACKLE },
   { "Caterpie", RGB15(8, 24, 8),   RGB15(31, 28, 6),
-    "..K..K.." ".KBBBBK." "KBEBBEBK" "KBBBBBBK" ".KBBBBK." ".KAAAAK." "..KBBK.." "...KK..." }
+    "..K..K.." ".KBBBBK." "KBEBBEBK" "KBBBBBBK" ".KBBBBK." ".KAAAAK." "..KBBK.." "...KK...",
+    6, MV_TACKLE },
+  // Your PIKACHU (yellow body, red cheeks). hp_base and move are not used for
+  // it: its HP and moves live in player_mon below.
+  { "Pikachu",  RGB15(31, 27, 6),  RGB15(30, 8, 6),
+    "KK....KK" ".BK..KB." ".KBBBBK." "KBEBBEBK" "KAABBAAK" "KBBBBBBK" ".KBBBBK." "..KKKK..",
+    0, MV_THUNDER_SHOCK }
+};
+
+// ---------- Moves ----------
+// Order must match the MV_ numbers in game.h. Power: bigger = more damage.
+const Move moves[NUM_MOVES] = {
+  { "Thunder Shock", 40 },
+  { "Quick Attack",  35 },
+  { "Tackle",        35 },
+  { "Gust",          40 }
 };
 
 // Encounter tables. Each line: species and weight (bigger = more common).
@@ -280,6 +297,15 @@ int cur_room = R_TOWN;
 int walk_frame = 0;
 int walk_timer = 0;
 int wild_species = -1;   // species of the current wild encounter (SP_...), -1 = none
+// Your starter: PIKACHU, level 5, 20/20 HP, 0 EXP, two moves.
+Mon player_mon = { SP_PIKACHU, 5, 20, 20, 0, 2, { MV_THUNDER_SHOCK, MV_QUICK_ATTACK } };
+Mon wild_mon;            // filled in by battle_begin() for every new fight
+int bt_state = BS_MESSAGE;
+int bt_cursor = 0;
+int bt_after = AFTER_MENU;
+int bt_redraw = 0;
+char bt_line1[BT_LINE];
+char bt_line2[BT_LINE];
 const Room rooms[NUM_ROOMS] = {
   { town_rows,   town_keys,   town_kinds,   TW_TREE,      0, NO_TILE, build_town   },
   { center_rows, center_keys, center_kinds, SOLID_INSIDE, 1, NO_TILE, build_center },
@@ -306,7 +332,7 @@ const unsigned char font5x8[91][5] = {
   { 0x00, 0x50, 0x30, 0x00, 0x00 },  /* punctuation 0x2C */
   { 0x08, 0x08, 0x08, 0x08, 0x08 },  /* punctuation 0x2D */
   { 0x00, 0x60, 0x60, 0x00, 0x00 },  /* punctuation 0x2E */
-  { 0x00, 0x00, 0x00, 0x00, 0x00 },  /* unused */
+  { 0x60, 0x30, 0x18, 0x0C, 0x06 },  /* slash 0x2F (for HP like 20/20) */
   { 0x3E, 0x51, 0x49, 0x45, 0x3E },  /* 0 */
   { 0x00, 0x42, 0x7F, 0x40, 0x00 },  /* 1 */
   { 0x42, 0x61, 0x51, 0x49, 0x46 },  /* 2 */
