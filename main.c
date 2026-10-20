@@ -2,6 +2,20 @@
 // entering/leaving buildings, talking).
 #include "game.h"
 
+// Switch to another room: build its pictures, put the trainer on the landing
+// tile, and repaint the whole screen once. Used by doors and by warps.
+static void change_room(int room, int sx, int sy, int sdir,
+                        int* x, int* y, int* dir) {
+  cur_room = room;
+  rooms[cur_room].build();          // this room's pictures
+  pick_start(sx, sy, x, y);
+  *dir = sdir;
+  walk_frame = 0;
+  walk_timer = 0;
+  steps_reset(*x, *y);              // arriving is not a step; no free encounter
+  show_map(*x, *y, *dir);
+}
+
 int main(void) {
   int x, y;
   int dir = DIR_UP;
@@ -15,6 +29,7 @@ int main(void) {
   cur_room = R_TOWN;
   rooms[cur_room].build();
   pick_start(START_TX, START_TY, &x, &y);
+  steps_reset(x, y);
   show_map(x, y, dir);
 
 #if DEBUG_HUD
@@ -26,13 +41,26 @@ int main(void) {
     int old_x = x, old_y = y, old_dir = dir;
     int old_walk_frame = walk_frame;
     int dx = 0, dy = 0;
-    int moved, door, npc, a_press;
+    int moved, door, npc, a_press, warp, wild;
     wait_vblank();
     frame++;
     keys = (unsigned short)(~REG_KEYINPUT) & 0x03FF;
 
+    rng_stir(frame ^ ((unsigned int)keys << 16));   // randomness for encounters
+
     // A counts only on the press (not while held).
     a_press = (keys & KEY_A) && !(prev_keys & KEY_A);
+
+    // While the wild encounter screen is showing, A flips the page and then
+    // returns to the route. Nothing else moves.
+    if (enc_open) {
+      prev_keys = keys;
+      if (a_press) encounter_advance(x, y, dir);
+#if DEBUG_HUD
+      show_lamps(frame, keys, 0, 0);
+#endif
+      continue;
+    }
 
     // While a dialogue box is open, A flips the page and nothing else moves.
     if (dlg_open) {
@@ -56,13 +84,8 @@ int main(void) {
       continue;
     }
     if (door >= 0) {
-      cur_room = doors[door].to;
-      rooms[cur_room].build();          // this room's pictures
-      pick_start(doors[door].sx, doors[door].sy, &x, &y);
-      dir = doors[door].sdir;
-      walk_frame = 0;
-      walk_timer = 0;
-      show_map(x, y, dir);
+      change_room(doors[door].to, doors[door].sx, doors[door].sy,
+                  doors[door].sdir, &x, &y, &dir);
       prev_keys = keys;
       continue;
     }
@@ -80,6 +103,15 @@ int main(void) {
     }
 
     moved = (x != old_x || y != old_y);
+
+    // Walking onto an exit tile (town <-> Route 1) changes the room.
+    warp = moved ? warp_at_feet(x, y) : -1;
+    if (warp >= 0) {
+      change_room(warps[warp].to, warps[warp].sx, warps[warp].sy,
+                  warps[warp].sdir, &x, &y, &dir);
+      continue;
+    }
+
     if (moved) {
       walk_timer++;
       if (walk_timer >= 6) { walk_timer = 0; walk_frame = 1 - walk_frame; }
@@ -95,6 +127,16 @@ int main(void) {
       int right  = ((x > old_x) ? x : old_x) + TILE;
       int bottom = ((y > old_y) ? y : old_y) + TILE;
       paint_box(left, top, right, bottom, x, y, dir);
+    }
+
+    // A new step on tall grass may start a wild encounter.
+    wild = moved ? step_encounter(x, y) : -1;
+    if (wild >= 0) {
+      wild_species = wild;              // remember which POKEMON appeared
+      walk_frame = 0;
+      walk_timer = 0;
+      encounter_start(wild_species);
+      continue;
     }
 
 #if DEBUG_HUD
