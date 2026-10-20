@@ -1,5 +1,5 @@
 // main.c - starts the game and runs the main loop (input, A button,
-// entering/leaving buildings, talking).
+// entering/leaving buildings, talking, wild battles).
 #include "game.h"
 
 // Switch to another room: build its pictures, put the trainer on the landing
@@ -42,20 +42,35 @@ int main(void) {
     int old_walk_frame = walk_frame;
     int dx = 0, dy = 0;
     int moved, door, npc, a_press, warp, wild;
+    unsigned short pressed;
     wait_vblank();
     frame++;
     keys = (unsigned short)(~REG_KEYINPUT) & 0x03FF;
 
     rng_stir(frame ^ ((unsigned int)keys << 16));   // randomness for encounters
 
-    // A counts only on the press (not while held).
-    a_press = (keys & KEY_A) && !(prev_keys & KEY_A);
+    // A counts only on the press (not while held). `pressed` holds every
+    // button that went down this frame (the battle menus use it).
+    pressed = (unsigned short)(keys & ~prev_keys);
+    a_press = (pressed & KEY_A) != 0;
 
-    // While the wild encounter screen is showing, A flips the page and then
-    // returns to the route. Nothing else moves.
-    if (enc_open) {
+    // While the battle screen is showing, the battle rules (world.c) get the
+    // buttons and nothing else moves. When the battle ends we go back to the
+    // map - or to the POKEMON CENTER if PIKACHU fainted.
+    if (battle_open) {
+      int result;
       prev_keys = keys;
-      if (a_press) encounter_advance(x, y, dir);
+      result = battle_input(pressed);
+      if (result == BATTLE_GOING) {
+        if (bt_redraw) battle_redraw();
+      } else {
+        battle_close();
+        if (result == BATTLE_LOST)
+          change_room(BLACKOUT_ROOM, BLACKOUT_TX, BLACKOUT_TY, DIR_UP,
+                      &x, &y, &dir);
+        else
+          show_map(x, y, dir);
+      }
 #if DEBUG_HUD
       show_lamps(frame, keys, 0, 0);
 #endif
@@ -132,10 +147,10 @@ int main(void) {
     // A new step on tall grass may start a wild encounter.
     wild = moved ? step_encounter(x, y) : -1;
     if (wild >= 0) {
-      wild_species = wild;              // remember which POKEMON appeared
       walk_frame = 0;
       walk_timer = 0;
-      encounter_start(wild_species);
+      battle_begin(wild);               // make the wild POKEMON (sets wild_species)
+      battle_screen_open();             // and show the battle screen
       continue;
     }
 
