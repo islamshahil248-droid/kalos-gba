@@ -1,5 +1,5 @@
-// render.c - drawing: the screen painter, VBlank wait, the dialogue box and
-// the debug lamps.
+// render.c - drawing: the screen painter, VBlank wait, the dialogue box, the
+// battle screen and the debug lamps.
 #include "game.h"
 
 // Paint a screen rectangle (right/bottom not included). Each pixel's final
@@ -170,19 +170,17 @@ void dialog_advance(int x, int y, int dir) {
   }
 }
 
-// ---------- Wild encounter screen ----------
-// A simple scene (sky, grass, two platforms), a placeholder picture of the
-// wild POKEMON, the trainer seen from behind, and the dialogue box below.
-// Drawn under forced blank like show_map. A closes it and repaints the map.
-int enc_open = 0;                      // 1 while the encounter screen is showing
-static char enc_text[96];              // "A wild NAME appeared!|..." (box text)
+// ---------- Battle screen ----------
+// Layout (240x160): the wild POKEMON's panel top-left and its picture top-right;
+// your PIKACHU's picture bottom-left and its panel bottom-right; the message /
+// menu box at the very bottom (same place as the dialogue box).
+// The whole scene is drawn once under forced blank (like show_map). After that
+// only the parts that changed are drawn again (battle_redraw), so it is quick.
+// world.c changes the numbers and text; this file only draws them.
+int battle_open = 0;                   // 1 while the battle screen is showing
 
-// Copy s to buf at position n (never past the end); returns the new position.
-static int enc_put(int n, const char* s) {
-  while (*s && n < (int)sizeof(enc_text) - 1) enc_text[n++] = *s++;
-  enc_text[n] = '\0';
-  return n;
-}
+#define PANEL_BORDER RGB15(12, 16, 26)
+#define PANEL_W      120
 
 // The 8x8 placeholder picture of species sp at 4x size (32x32 pixels).
 static void draw_species(int sp, int x0, int y0) {
@@ -204,18 +202,8 @@ static void draw_species(int sp, int x0, int y0) {
   }
 }
 
-// The trainer's back view (the existing sprite) at 3x size (48x48 pixels).
-static void draw_trainer_back(int x0, int y0) {
-  int sx, sy;
-  for (sy = 0; sy < TILE; sy++)
-    for (sx = 0; sx < TILE; sx++) {
-      unsigned short c = sprite_gfx[DIR_UP][0][sy * TILE + sx];
-      if (c != CLEAR)
-        fill_rect(x0 + sx * 3, y0 + sy * 3, x0 + sx * 3 + 3, y0 + sy * 3 + 3, c);
-    }
-}
-
-static void draw_wild_scene(int sp) {
+// Sky, grass, two platforms and the two POKEMON pictures.
+static void draw_battle_scene(void) {
   fill_rect(0, 0, SCREEN_W, 28, RGB15(17, 25, 31));              // sky
   fill_rect(0, 28, SCREEN_W, 64, RGB15(22, 29, 31));
   fill_rect(0, 64, SCREEN_W, SCREEN_H, RGB15(11, 24, 8));        // grass
@@ -227,37 +215,133 @@ static void draw_wild_scene(int sp) {
   fill_rect(20, 102, 92, 105, RGB15(14, 29, 11));                // our platform
   fill_rect(12, 105, 100, 109, RGB15(9, 20, 7));
   fill_rect(22, 109, 90, 111, RGB15(6, 14, 5));
-  draw_species(sp, 160, 32);
-  draw_trainer_back(36, 54);
+  draw_species(wild_mon.species, 160, 32);
+  draw_species(player_mon.species, 36, 70);
 }
 
-// Show "A wild NAME appeared!" on the encounter screen.
-void encounter_start(int sp) {
-  int n;
-  if (sp < 0 || sp >= NUM_SPECIES) return;
-  n = enc_put(0, "A wild ");
-  n = enc_put(n, species[sp].name);
-  n = enc_put(n, " appeared!|Battles are not ready yet. Press A to return to the route.");
+// A framed white panel.
+static void draw_panel(int x, int y, int w, int h) {
+  fill_rect(x, y, x + w, y + h, OUTLINE);
+  fill_rect(x + 1, y + 1, x + w - 1, y + h - 1, PANEL_BORDER);
+  fill_rect(x + 3, y + 3, x + w - 3, y + h - 3, DLG_PAPER);
+}
+
+// HP bar w pixels wide: green above half, yellow above a fifth, then red.
+static void draw_hp_bar(int x, int y, int w, int hp, int max_hp) {
+  int fill = (max_hp > 0) ? hp * w / max_hp : 0;
+  unsigned short col;
+  if (hp > 0 && fill < 1) fill = 1;          // a sliver while still alive
+  if (fill > w) fill = w;
+  if (hp * 100 >= max_hp * 50)      col = RGB15(6, 26, 8);
+  else if (hp * 100 >= max_hp * 20) col = RGB15(30, 25, 3);
+  else                              col = RGB15(30, 6, 4);
+  fill_rect(x - 1, y - 1, x + w + 1, y + 6, OUTLINE);
+  fill_rect(x, y, x + w, y + 5, RGB15(9, 9, 11));
+  if (fill > 0) fill_rect(x, y, x + fill, y + 5, col);
+}
+
+// Name, level, HP bar and HP numbers (your POKEMON also shows its EXP).
+static void draw_mon_panel(const Mon* m, int x, int y, int is_player) {
+  char buf[16];
+  draw_panel(x, y, PANEL_W, is_player ? 37 : 27);
+  draw_line(x + 6, y + 4, species[m->species].name);
+  str_set(buf, (int)sizeof(buf), "Lv");
+  str_add_num(buf, (int)sizeof(buf), m->level);
+  draw_line(x + 88, y + 4, buf);
+  draw_line(x + 6, y + 14, "HP");
+  draw_hp_bar(x + 24, y + 16, 54, m->hp, m->max_hp);
+  str_set(buf, (int)sizeof(buf), "");
+  str_add_num(buf, (int)sizeof(buf), m->hp);
+  str_add(buf, (int)sizeof(buf), "/");
+  str_add_num(buf, (int)sizeof(buf), m->max_hp);
+  draw_line(x + 84, y + 14, buf);
+  if (is_player) {
+    str_set(buf, (int)sizeof(buf), "EXP ");
+    str_add_num(buf, (int)sizeof(buf), m->exp);
+    draw_line(x + 6, y + 25, buf);
+  }
+}
+
+// Little arrow pointing at the chosen menu line (4 wide, 7 tall).
+static void draw_cursor(int x, int y) {
+  int i;
+  for (i = 0; i < 7; i++)
+    fill_rect(x, y + i, x + ((i < 4) ? i + 1 : 7 - i), y + i + 1, DLG_INK);
+}
+
+// "Press A" arrow in the corner of the box (same shape as the dialogue one).
+static void draw_more_arrow(void) {
+  int ax = DLG_X + DLG_W - 14, ay = DLG_Y + DLG_H - 10;
+  fill_rect(ax,     ay,     ax + 7, ay + 1, DLG_INK);
+  fill_rect(ax + 1, ay + 1, ax + 6, ay + 2, DLG_INK);
+  fill_rect(ax + 2, ay + 2, ax + 5, ay + 3, DLG_INK);
+  fill_rect(ax + 3, ay + 3, ax + 4, ay + 4, DLG_INK);
+}
+
+// A small framed area inside the box (for the menu lists).
+static void draw_subbox(int x0) {
+  fill_rect(DLG_X + x0, DLG_Y + 5, DLG_X + DLG_W - 5, DLG_Y + DLG_H - 5, OUTLINE);
+  fill_rect(DLG_X + x0 + 1, DLG_Y + 6, DLG_X + DLG_W - 6, DLG_Y + DLG_H - 6, DLG_PAPER);
+}
+
+// The box at the bottom: a message, the FIGHT/RUN menu, or the move list.
+static void draw_battle_box(void) {
+  char buf[BT_LINE];
+  int i;
+  fill_rect(DLG_X, DLG_Y, DLG_X + DLG_W, DLG_Y + DLG_H, OUTLINE);
+  fill_rect(DLG_X + 1, DLG_Y + 1, DLG_X + DLG_W - 1, DLG_Y + DLG_H - 1, PANEL_BORDER);
+  fill_rect(DLG_X + 4, DLG_Y + 4, DLG_X + DLG_W - 4, DLG_Y + DLG_H - 4, DLG_PAPER);
+  if (bt_state == BS_MESSAGE) {
+    draw_line(DLG_X + 10, DLG_Y + 8, bt_line1);
+    draw_line(DLG_X + 10, DLG_Y + 21, bt_line2);
+    draw_more_arrow();
+  } else if (bt_state == BS_MENU) {
+    draw_line(DLG_X + 10, DLG_Y + 8, "What will");
+    str_set(buf, BT_LINE, species[player_mon.species].name);
+    str_add(buf, BT_LINE, " do?");
+    draw_line(DLG_X + 10, DLG_Y + 21, buf);
+    draw_subbox(120);
+    draw_line(DLG_X + 140, DLG_Y + 8, "FIGHT");
+    draw_line(DLG_X + 140, DLG_Y + 21, "RUN");
+    draw_cursor(DLG_X + 129, DLG_Y + 9 + bt_cursor * 13);
+  } else {                                           // BS_MOVES
+    for (i = 0; i < player_mon.num_moves; i++)
+      draw_line(DLG_X + 26, DLG_Y + 8 + i * 13, moves[player_mon.move[i]].name);
+    draw_cursor(DLG_X + 14, DLG_Y + 9 + bt_cursor * 13);
+    draw_subbox(140);
+    draw_line(DLG_X + 148, DLG_Y + 8, "B: Back");
+    str_set(buf, BT_LINE, "Power ");
+    str_add_num(buf, BT_LINE, moves[player_mon.move[bt_cursor]].power);
+    draw_line(DLG_X + 148, DLG_Y + 21, buf);
+  }
+}
+
+// Draw again whatever world.c marked as out of date in bt_redraw.
+void battle_redraw(void) {
+  if (bt_redraw & BT_HUD) {
+    draw_mon_panel(&wild_mon, 8, 8, 0);
+    draw_mon_panel(&player_mon, 112, 74, 1);
+  }
+  if (bt_redraw & BT_BOX) draw_battle_box();
+  bt_redraw = 0;
+}
+
+// Show the whole battle screen (call right after battle_begin()).
+void battle_screen_open(void) {
   wait_vblank();
   REG_DISPCNT = 0x0080;
-  draw_wild_scene(sp);
-  dlg_show(enc_text);
+  draw_battle_scene();
+  bt_redraw = BT_HUD | BT_BOX;
+  battle_redraw();
   REG_DISPCNT = 0x0403;
-  enc_open = 1;
+  battle_open = 1;
 }
 
-// A pressed on the encounter screen: next page, or back to the route.
-void encounter_advance(int x, int y, int dir) {
-  if (dlg_has_more()) {
-    dlg_pos = dlg_next;
-    dlg_layout();
-    draw_dialog_text();
-  } else {
-    enc_open = 0;
-    walk_frame = 0;
-    walk_timer = 0;
-    show_map(x, y, dir);
-  }
+// The battle is over: main repaints the map (or moves you to the CENTER).
+void battle_close(void) {
+  battle_open = 0;
+  walk_frame = 0;
+  walk_timer = 0;
 }
 
 #if DEBUG_HUD
@@ -271,7 +355,7 @@ void lamp(int slot, int on, unsigned short color) {
 }
 
 // 0 blinks = loop runs; 1-4 = LEFT/RIGHT/UP/DOWN; 5 = moved; 6 = blocked;
-// 7 (orange) = a dialogue box or the encounter screen is open
+// 7 (orange) = a dialogue box or the battle screen is open
 void show_lamps(unsigned int frame, unsigned short keys,
                        int moved, int blocked) {
   lamp(0, (frame >> 5) & 1, RGB15(31, 0, 31));
@@ -281,7 +365,7 @@ void show_lamps(unsigned int frame, unsigned short keys,
   lamp(4, keys & KEY_DOWN,  RGB15(0, 31, 31));
   lamp(5, moved,            RGB15(31, 31, 31));
   lamp(6, blocked,          RGB15(31, 0, 0));
-  lamp(7, dlg_open || enc_open, RGB15(31, 20, 0));
+  lamp(7, dlg_open || battle_open, RGB15(31, 20, 0));
 }
 #endif
 // END OF render.c
