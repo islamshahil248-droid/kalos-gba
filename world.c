@@ -226,6 +226,12 @@ void str_add_num(char* dst, int size, int v) {
 
 static const char* mon_name(const Mon* m) { return species[m->species].name; }
 
+// Heal your POKEMON: full HP. (The nurse calls this; so does fainting.)
+// EXP is kept, nothing else changes.
+void heal_party(void) {
+  player_mon.hp = player_mon.max_hp;
+}
+
 // Show a two-line message; `after` says what happens when A closes it.
 static void say(int after, const char* line1, const char* line2) {
   str_set(bt_line1, BT_LINE, line1);
@@ -277,7 +283,7 @@ void battle_begin(int sp) {
   wild_mon.exp = 0;
   wild_mon.num_moves = 1;
   wild_mon.move[0] = species[sp].move;
-  if (player_mon.hp <= 0) player_mon.hp = player_mon.max_hp;   // safety net
+  if (player_mon.hp <= 0) heal_party();                        // safety net
   bt_cursor = 0;
   bt_redraw = BT_HUD | BT_BOX;
   str_set(a, BT_LINE, "A wild ");
@@ -365,7 +371,7 @@ int battle_input(unsigned short pressed) {
       case AFTER_END_WON:  return BATTLE_WON;
       case AFTER_END_RAN:  return BATTLE_RAN;
       case AFTER_END_LOST:
-        player_mon.hp = player_mon.max_hp;                // healed at the CENTER
+        heal_party();                                     // healed at the CENTER
         return BATTLE_LOST;
       default:
         break;
