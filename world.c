@@ -119,4 +119,75 @@ int front_npc(int x, int y, int dir) {
   if (i < 0) i = npc_ahead(bx, by, dx, dy);
   return i;
 }
+
+// ---------- Exits you walk onto, and wild encounters ----------
+static int last_step_tx = -1, last_step_ty = -1;   // tile of the last step
+static int enc_cooldown = 0;                       // safe tall-grass steps left
+static unsigned int rng_state = 0x2545F491u;       // random number state
+
+// Mix a number into the random state (main calls this every frame, so the
+// result depends on how long you have been playing and on your button timing).
+void rng_stir(unsigned int v) {
+  rng_state ^= v + 0x9E3779B9u + (rng_state << 6) + (rng_state >> 2);
+  if (rng_state == 0) rng_state = 1;
+}
+
+static unsigned int rng_next(void) {
+  rng_state ^= rng_state << 13;
+  rng_state ^= rng_state >> 17;
+  rng_state ^= rng_state << 5;
+  return rng_state;
+}
+
+// The map tile under the trainer's feet (the middle of the body box).
+static int foot_tx(int x) { return (x + 8) >> 4; }
+static int foot_ty(int y) { return (y + HB_BOTTOM - 2) >> 4; }
+
+// Index of the warp the trainer is standing on, or -1.
+int warp_at_feet(int x, int y) {
+  int i, tx = foot_tx(x), ty = foot_ty(y);
+  for (i = 0; i < NUM_WARPS; i++)
+    if (warps[i].from == cur_room && warps[i].tx == tx && warps[i].ty == ty)
+      return i;
+  return -1;
+}
+
+// Call when arriving in a room: the tile you arrive on is not a "new step",
+// and the encounter cooldown starts fresh.
+void steps_reset(int x, int y) {
+  last_step_tx = foot_tx(x);
+  last_step_ty = foot_ty(y);
+  enc_cooldown = 0;
+}
+
+// Call after the trainer MOVED. Only stepping onto a NEW tile counts as a step,
+// and only on the room's tall grass. Returns the wild species (SP_...) or -1.
+int step_encounter(int x, int y) {
+  int tx = foot_tx(x), ty = foot_ty(y), i, total, r;
+  const Zone* z = 0;
+  if (tx == last_step_tx && ty == last_step_ty) return -1;   // same tile
+  last_step_tx = tx;
+  last_step_ty = ty;
+  if (tx < 0 || ty < 0 || tx >= MAP_W || ty >= MAP_H) return -1;
+  if (rooms[cur_room].tall == NO_TILE ||
+      map_kind[cur_room][ty][tx] != rooms[cur_room].tall) return -1;
+  if (enc_cooldown > 0) { enc_cooldown--; return -1; }       // safe steps
+  for (i = 0; i < NUM_ZONES; i++)
+    if (zones[i].room == cur_room) z = &zones[i];
+  if (!z) return -1;
+  if ((int)(rng_next() % 100) >= z->percent) return -1;      // no encounter
+  total = 0;
+  for (i = 0; i < z->count; i++) total += z->entries[i].weight;
+  if (total <= 0) return -1;
+  r = (int)(rng_next() % (unsigned int)total);               // pick by weight
+  for (i = 0; i < z->count; i++) {
+    if (r < z->entries[i].weight) {
+      enc_cooldown = ENC_COOLDOWN_STEPS;
+      return z->entries[i].species;
+    }
+    r -= z->entries[i].weight;
+  }
+  return -1;
+}
 // END OF world.c
+
