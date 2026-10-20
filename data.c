@@ -106,6 +106,27 @@ static const unsigned char house2_kinds[] = {
   H2_FA, H2_WALL, H2_WIN, H2_DOOR, H2_SHELF_A, H2_SHELF_B, H2_BED_H, H2_BED_F,
   H2_TABLE, H2_CHAIR, H2_PLANT, H2_NPC, H2_RUG
 };
+// ---------- Route 1 ----------
+// G grass, P path, F flowers, T tree, t TALL GRASS (walkable, wild POKEMON can
+// appear), S sign (solid, read it like a person). The top-row gap at column 6
+// leads back to town. Keep the top row solid except that gap (HUD lamps).
+static const char route1_rows[MAP_H][MAP_W + 1] = {
+"TTTTTTPTTTTTTTT",
+"TGGGGGPGGGGGGGT",
+"TGGGGSPGGFGGGGT",
+"TGttGGPGGGGttGT",
+"TGttGGPPPPGttGT",
+"TGGGGGGGGPGGGGT",
+"TGFGttGGGPGGGTT",
+"TGTGttGGGPGttGT",
+"TGGGGGGGGPGttFT",
+"TTTTTTTTTTTTTTT"
+};
+static const char route1_keys[] = "GPFtTS";
+static const unsigned char route1_kinds[] = {
+  RT_GRASS, RT_PATH, RT_FLOWER, RT_TALL, RT_TREE, RT_SIGN
+};
+
 // ---------- Doors ----------
 // Entering lands on the mat just inside; leaving lands just below the door.
 const Door doors[] = {
@@ -121,6 +142,16 @@ const Door doors[] = {
 // How many doors there are (other files read this number).
 const int num_doors = (int)(sizeof(doors) / sizeof(doors[0]));
 
+// ---------- Warps ----------
+// Walk onto the tile (no A button needed) and you arrive at the landing tile.
+// The town's south path exit leads to Route 1; Route 1's top gap leads back.
+const Door warps[] = {
+  { R_TOWN,   6, 9, R_ROUTE1, 6, 1, DIR_DOWN },
+  { R_ROUTE1, 6, 0, R_TOWN,   6, 8, DIR_UP   }
+};
+// How many warps there are (other files read this number).
+const int num_warps = (int)(sizeof(warps) / sizeof(warps[0]));
+
 // ---------- People ----------
 // Each person is a solid tile on the map (so nobody can walk through them).
 // This table says who stands where and what they say.
@@ -132,10 +163,36 @@ const Npc npcs[] = {
   { R_CENTER,  6, 2, 3, "Welcome to the POKEMON CENTER!|We heal your POKEMON back to perfect health.|We hope to see you again!" },
   { R_MART,    6, 2, 3, "Hello! Take a look at our supplies.|Come back any time!" },
   { R_HOUSE1, 11, 3, 1, "Have you been exploring the town?|Be careful out there, and come home soon!" },
-  { R_HOUSE2, 10, 6, 1, "Every great journey begins somewhere.|Take your time and enjoy the road." }
+  { R_HOUSE2, 10, 6, 1, "Every great journey begins somewhere.|Take your time and enjoy the road." },
+  { R_ROUTE1,  5, 2, 1, "ROUTE 1|The town is to the north. Watch out for wild POKEMON in the tall grass!" }
 };
 // How many people there are (other files read this number).
 const int num_npcs = (int)(sizeof(npcs) / sizeof(npcs[0]));
+
+// ---------- Wild POKEMON ----------
+// Placeholder pictures: 8x8 letters, drawn 4x bigger on the encounter screen.
+// B = body color, A = accent color, K = outline, E = eye, Y = yellow, . = empty.
+// Order must match the SP_ numbers in game.h.
+const Species species[NUM_SPECIES] = {
+  { "Pidgey",   RGB15(18, 12, 6),  RGB15(30, 26, 19),
+    "..KKKK.." ".KBBBBK." "KBBEBBBK" "KBBBBYYK" "KAABBBBK" ".KAAAAK." "..KYYK.." "..K..K.." },
+  { "Rattata",  RGB15(17, 9, 21),  RGB15(30, 26, 22),
+    ".KK..KK." "KBBKKBBK" "KBBBBBBK" "KBEBBEBK" "KBBBBBBK" "KBBAABBK" ".KBBBBK." "..KKKK.." },
+  { "Caterpie", RGB15(8, 24, 8),   RGB15(31, 28, 6),
+    "..K..K.." ".KBBBBK." "KBEBBEBK" "KBBBBBBK" ".KBBBBK." ".KAAAAK." "..KBBK.." "...KK..." }
+};
+
+// Encounter tables. Each line: species and weight (bigger = more common).
+static const WildEntry route1_wild[] = {
+  { SP_PIDGEY, 45 }, { SP_RATTATA, 40 }, { SP_CATERPIE, 15 }
+};
+// One zone per room that has tall grass: room, chance in percent for each NEW
+// tall-grass tile you step on (change 15 to make encounters rarer or commoner),
+// number of table entries, the table.
+const Zone zones[] = {
+  { R_ROUTE1, 15, (unsigned char)(sizeof(route1_wild) / sizeof(route1_wild[0])), route1_wild }
+};
+const int num_zones = (int)(sizeof(zones) / sizeof(zones[0]));
 // ---------- Trainer art ----------
 // Sprite colors: K outline, B cap, S skin, H hair, Y shirt, J jeans, R shoes
 const char art_down[16][17] = {
@@ -222,12 +279,14 @@ unsigned char map_kind[NUM_ROOMS][MAP_H][MAP_W];
 int cur_room = R_TOWN;
 int walk_frame = 0;
 int walk_timer = 0;
+int wild_species = -1;   // species of the current wild encounter (SP_...), -1 = none
 const Room rooms[NUM_ROOMS] = {
-  { town_rows,   town_keys,   town_kinds,   TW_TREE,     0, build_town   },
-  { center_rows, center_keys, center_kinds, SOLID_INSIDE, 1, build_center },
-  { mart_rows,   mart_keys,   mart_kinds,   SOLID_INSIDE, 1, build_mart   },
-  { house1_rows, house1_keys, house1_kinds, SOLID_INSIDE, 1, build_house1 },
-  { house2_rows, house2_keys, house2_kinds, SOLID_INSIDE, 1, build_house2 }
+  { town_rows,   town_keys,   town_kinds,   TW_TREE,      0, NO_TILE, build_town   },
+  { center_rows, center_keys, center_kinds, SOLID_INSIDE, 1, NO_TILE, build_center },
+  { mart_rows,   mart_keys,   mart_kinds,   SOLID_INSIDE, 1, NO_TILE, build_mart   },
+  { house1_rows, house1_keys, house1_kinds, SOLID_INSIDE, 1, NO_TILE, build_house1 },
+  { house2_rows, house2_keys, house2_kinds, SOLID_INSIDE, 1, NO_TILE, build_house2 },
+  { route1_rows, route1_keys, route1_kinds, RT_TREE,      0, RT_TALL, build_route1 }
 };
 // 5x8 pixel letters for ASCII 32 (space) to 122 (z). Each letter is 5
 // columns; in a column, bit 0 is the top pixel. Unused symbols are blank.
@@ -325,3 +384,4 @@ const unsigned char font5x8[91][5] = {
   { 0x44, 0x64, 0x54, 0x4C, 0x44 },  /* z */
 };
 // END OF data.c
+
