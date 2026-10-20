@@ -1,5 +1,5 @@
 // world.c - the rules: turning maps into tiles, collision, doors, finding
-// the person in front of you.
+// the person in front of you, wild encounters and the battle rules.
 #include "game.h"
 
 // Turn map letters into tile numbers (unknown letters: tile 0).
@@ -189,5 +189,188 @@ int step_encounter(int x, int y) {
   }
   return -1;
 }
-// END OF world.c
 
+// ---------- Battles ----------
+// The battle is a tiny state machine. bt_state says what the bottom box shows:
+//   BS_MESSAGE  two lines of text; A closes them and then bt_after happens
+//   BS_MENU     FIGHT / RUN
+//   BS_MOVES    the list of your moves
+// Every turn goes: you attack -> (if it survives) it attacks -> back to menu.
+// This file only changes numbers and text; render.c draws them (bt_redraw
+// tells it what is out of date).
+
+// Tiny text helpers (no sprintf: we use no libraries).
+// Add text s to the end of dst, never writing more than `size` bytes in total.
+void str_add(char* dst, int size, const char* s) {
+  int n = 0;
+  while (dst[n]) n++;
+  while (*s && n < size - 1) dst[n++] = *s++;
+  dst[n] = '\0';
+}
+
+void str_set(char* dst, int size, const char* s) {
+  dst[0] = '\0';
+  str_add(dst, size, s);
+}
+
+// Add the number v (0 or more) written in digits.
+void str_add_num(char* dst, int size, int v) {
+  char digits[12], one[2];
+  int n = 0, i;
+  if (v < 0) v = 0;
+  if (v == 0) digits[n++] = '0';
+  while (v > 0 && n < 11) { digits[n++] = (char)('0' + v % 10); v /= 10; }
+  one[1] = '\0';
+  for (i = n - 1; i >= 0; i--) { one[0] = digits[i]; str_add(dst, size, one); }
+}
+
+static const char* mon_name(const Mon* m) { return species[m->species].name; }
+
+// Show a two-line message; `after` says what happens when A closes it.
+static void say(int after, const char* line1, const char* line2) {
+  str_set(bt_line1, BT_LINE, line1);
+  str_set(bt_line2, BT_LINE, line2);
+  bt_state = BS_MESSAGE;
+  bt_after = after;
+  bt_redraw |= BT_BOX;
+}
+
+// Damage of one hit: grows with the attacker's level and the move's power,
+// plus 0-2 extra points of luck. (Level 5 THUNDER SHOCK = 7 to 9.)
+static int calc_damage(int level, int power) {
+  return power * level / 30 + 1 + (int)(rng_next() % 3u);
+}
+
+// Take `dmg` HP away (HP never goes below 0).
+static void take_damage(Mon* m, int dmg) {
+  m->hp -= dmg;
+  if (m->hp < 0) m->hp = 0;
+  bt_redraw |= BT_HUD;
+}
+
+// "<attacker> used <move>!" / "<target> took N damage."
+static void say_attack(const Mon* attacker, const Mon* target, int mv,
+                       int dmg, int after) {
+  char a[BT_LINE], b[BT_LINE];
+  str_set(a, BT_LINE, "");
+  if (attacker == &wild_mon) str_add(a, BT_LINE, "Wild ");
+  str_add(a, BT_LINE, mon_name(attacker));
+  str_add(a, BT_LINE, " used ");
+  str_add(a, BT_LINE, moves[mv].name);
+  str_add(a, BT_LINE, "!");
+  str_set(b, BT_LINE, mon_name(target));
+  str_add(b, BT_LINE, " took ");
+  str_add_num(b, BT_LINE, dmg);
+  str_add(b, BT_LINE, " damage.");
+  say(after, a, b);
+}
+
+// Start a fight against wild species sp: make the wild POKEMON (level 2-4)
+// and show the first message.
+void battle_begin(int sp) {
+  char a[BT_LINE], b[BT_LINE];
+  wild_species = sp;
+  wild_mon.species = (unsigned char)sp;
+  wild_mon.level = (unsigned char)(2 + rng_next() % 3u);
+  wild_mon.max_hp = species[sp].hp_base + 2 * wild_mon.level;
+  wild_mon.hp = wild_mon.max_hp;
+  wild_mon.exp = 0;
+  wild_mon.num_moves = 1;
+  wild_mon.move[0] = species[sp].move;
+  if (player_mon.hp <= 0) player_mon.hp = player_mon.max_hp;   // safety net
+  bt_cursor = 0;
+  bt_redraw = BT_HUD | BT_BOX;
+  str_set(a, BT_LINE, "A wild ");
+  str_add(a, BT_LINE, mon_name(&wild_mon));
+  str_add(a, BT_LINE, " appeared!");
+  str_set(b, BT_LINE, "Go! ");
+  str_add(b, BT_LINE, mon_name(&player_mon));
+  str_add(b, BT_LINE, "!");
+  say(AFTER_MENU, a, b);
+}
+
+// Your attack with move slot `slot`.
+static void player_attack(int slot) {
+  int mv = player_mon.move[slot];
+  int dmg = calc_damage(player_mon.level, moves[mv].power);
+  take_damage(&wild_mon, dmg);
+  say_attack(&player_mon, &wild_mon, mv, dmg,
+             (wild_mon.hp <= 0) ? AFTER_WIN : AFTER_ENEMY);
+}
+
+// The wild POKEMON attacks back.
+static void enemy_attack(void) {
+  int mv = wild_mon.move[0];
+  int dmg = calc_damage(wild_mon.level, moves[mv].power);
+  take_damage(&player_mon, dmg);
+  say_attack(&wild_mon, &player_mon, mv, dmg,
+             (player_mon.hp <= 0) ? AFTER_LOSE : AFTER_MENU);
+}
+
+// Call once per frame with the buttons that were JUST pressed this frame
+// (not held). Returns BATTLE_GOING until the battle is over.
+int battle_input(unsigned short pressed) {
+  int a = (pressed & KEY_A) != 0;
+  int b = (pressed & KEY_B) != 0;
+  int step = 0;                      // -1 = up/left, +1 = down/right
+  char l1[BT_LINE], l2[BT_LINE];
+  if (pressed & (KEY_DOWN | KEY_RIGHT)) step = 1;
+  if (pressed & (KEY_UP | KEY_LEFT)) step = -1;
+
+  if (bt_state == BS_MENU) {
+    if (step != 0) { bt_cursor = 1 - bt_cursor; bt_redraw |= BT_BOX; }   // FIGHT <-> RUN
+    if (a) {
+      if (bt_cursor == 0) {                               // FIGHT
+        bt_state = BS_MOVES;
+        bt_cursor = 0;
+        bt_redraw |= BT_BOX;
+      } else {                                            // RUN: always works
+        say(AFTER_END_RAN, "Got away safely!", "");
+      }
+    }
+  } else if (bt_state == BS_MOVES) {
+    int n = player_mon.num_moves;
+    if (step != 0 && n > 0) { bt_cursor = (bt_cursor + step + n) % n; bt_redraw |= BT_BOX; }
+    if (b) { bt_state = BS_MENU; bt_cursor = 0; bt_redraw |= BT_BOX; }
+    else if (a) player_attack(bt_cursor);
+  } else if (a) {                                         // BS_MESSAGE
+    switch (bt_after) {
+      case AFTER_MENU:
+        bt_state = BS_MENU;
+        bt_cursor = 0;
+        bt_redraw |= BT_BOX;
+        break;
+      case AFTER_ENEMY:
+        enemy_attack();
+        break;
+      case AFTER_WIN: {                                   // the wild one fainted
+        int gain = 5 + 2 * wild_mon.level;
+        player_mon.exp = (unsigned short)(player_mon.exp + gain);
+        str_set(l1, BT_LINE, "Wild ");
+        str_add(l1, BT_LINE, mon_name(&wild_mon));
+        str_add(l1, BT_LINE, " fainted!");
+        str_set(l2, BT_LINE, mon_name(&player_mon));
+        str_add(l2, BT_LINE, " gained ");
+        str_add_num(l2, BT_LINE, gain);
+        str_add(l2, BT_LINE, " Exp. Points!");
+        say(AFTER_END_WON, l1, l2);
+        bt_redraw |= BT_HUD;                              // new EXP number
+        break;
+      }
+      case AFTER_LOSE:                                    // your POKEMON fainted
+        str_set(l1, BT_LINE, mon_name(&player_mon));
+        str_add(l1, BT_LINE, " fainted!");
+        say(AFTER_END_LOST, l1, "You rushed to the POKEMON CENTER!");
+        break;
+      case AFTER_END_WON:  return BATTLE_WON;
+      case AFTER_END_RAN:  return BATTLE_RAN;
+      case AFTER_END_LOST:
+        player_mon.hp = player_mon.max_hp;                // healed at the CENTER
+        return BATTLE_LOST;
+      default:
+        break;
+    }
+  }
+  return BATTLE_GOING;
+}
+// END OF world.c
