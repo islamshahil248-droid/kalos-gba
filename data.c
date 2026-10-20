@@ -156,15 +156,17 @@ const int num_warps = (int)(sizeof(warps) / sizeof(warps[0]));
 // Each person is a solid tile on the map (so nobody can walk through them).
 // This table says who stands where and what they say.
 // Text: '|' starts a new page; long sentences wrap by themselves.
+// The last number: 1 = this person heals your POKEMON when you talk to them
+// (only the nurse), 0 = just talks.
 // Supported: letters, digits and . , ! ? ' " - : ( )
 const Npc npcs[] = {
-  { R_TOWN,    5, 5, 1, "The tall grass can hide wild Pokemon!" },
-  { R_TOWN,   12, 5, 1, "The POKEMON CENTER on this street heals your team for free." },
-  { R_CENTER,  6, 2, 3, "Welcome to the POKEMON CENTER!|We heal your POKEMON back to perfect health.|We hope to see you again!" },
-  { R_MART,    6, 2, 3, "Hello! Take a look at our supplies.|Come back any time!" },
-  { R_HOUSE1, 11, 3, 1, "Have you been exploring the town?|Be careful out there, and come home soon!" },
-  { R_HOUSE2, 10, 6, 1, "Every great journey begins somewhere.|Take your time and enjoy the road." },
-  { R_ROUTE1,  5, 2, 1, "ROUTE 1|The town is to the north. Watch out for wild POKEMON in the tall grass!" }
+  { R_TOWN,    5, 5, 1, "The tall grass can hide wild Pokemon!", 0 },
+  { R_TOWN,   12, 5, 1, "The POKEMON CENTER on this street heals your team for free.", 0 },
+  { R_CENTER,  6, 2, 3, "Welcome to the POKEMON CENTER!|We heal your POKEMON back to perfect health.|Thank you for waiting! PIKACHU has been healed to full health!|We hope to see you again!", 1 },
+  { R_MART,    6, 2, 3, "Hello! Take a look at our supplies.|Come back any time!", 0 },
+  { R_HOUSE1, 11, 3, 1, "Have you been exploring the town?|Be careful out there, and come home soon!", 0 },
+  { R_HOUSE2, 10, 6, 1, "Every great journey begins somewhere.|Take your time and enjoy the road.", 0 },
+  { R_ROUTE1,  5, 2, 1, "ROUTE 1|The town is to the north. Watch out for wild POKEMON in the tall grass!", 0 }
 };
 // How many people there are (other files read this number).
 const int num_npcs = (int)(sizeof(npcs) / sizeof(npcs[0]));
@@ -410,4 +412,3 @@ const unsigned char font5x8[91][5] = {
   { 0x44, 0x64, 0x54, 0x4C, 0x44 },  /* z */
 };
 // END OF data.c
-
