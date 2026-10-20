@@ -1,5 +1,5 @@
 // GBA town with 4 enterable buildings, NPCs, dialogue, Route 1 and
-// wild POKEMON encounters.
+// wild POKEMON encounters and turn-based battles.
 // Mode 3, 240x160, devkitARM, no libraries.
 //
 // game.h - shared by every .c file: constants, types, and the list of what
@@ -14,6 +14,7 @@
 #define VRAM ((volatile unsigned short*)0x06000000)
 #define RGB15(r, g, b) ((r) | ((g) << 5) | ((b) << 10))
 #define KEY_A     0x0001
+#define KEY_B     0x0002
 #define KEY_RIGHT 0x0010
 #define KEY_LEFT  0x0020
 #define KEY_UP    0x0040
@@ -73,11 +74,32 @@ enum { RT_GRASS, RT_PATH, RT_FLOWER, RT_TALL, RT_TREE, RT_SIGN };
 #define NO_TILE 255           // "this room has no such tile"
 
 // Wild POKEMON. Species numbers (index into species[] in data.c).
-enum { SP_PIDGEY, SP_RATTATA, SP_CATERPIE, NUM_SPECIES };
+// SP_PIKACHU is the player's own POKEMON; it is not in any wild encounter table.
+enum { SP_PIDGEY, SP_RATTATA, SP_CATERPIE, SP_PIKACHU, NUM_SPECIES };
 
 // After an encounter, this many tall-grass steps are safe (no new encounter).
 // The chance per step lives in zones[] in data.c.
 #define ENC_COOLDOWN_STEPS 3
+
+// ---- Battles ----
+enum { MV_THUNDER_SHOCK, MV_QUICK_ATTACK, MV_TACKLE, MV_GUST, NUM_MOVES };
+#define MAX_MOVES 4         // moves one POKEMON can know
+#define BT_LINE   36        // one battle message line (34 letters + the end mark)
+// What the bottom box of the battle screen is doing:
+enum { BS_MESSAGE, BS_MENU, BS_MOVES };   // text / FIGHT-RUN menu / move list
+// What happens after the player closes a message with A:
+enum { AFTER_MENU, AFTER_ENEMY, AFTER_WIN, AFTER_LOSE,
+       AFTER_END_WON, AFTER_END_RAN, AFTER_END_LOST };
+// What battle_input() reports back to main:
+enum { BATTLE_GOING, BATTLE_WON, BATTLE_RAN, BATTLE_LOST };
+// Bits of bt_redraw: which part of the battle screen must be drawn again.
+#define BT_HUD 1            // the two info panels (names, HP bars, numbers)
+#define BT_BOX 2            // the message / menu box at the bottom
+// Where you wake up after fainting: the landing tile of the CENTER door
+// (the entry for R_CENTER in doors[], data.c).
+#define BLACKOUT_ROOM R_CENTER
+#define BLACKOUT_TX   7
+#define BLACKOUT_TY   8
 
 typedef struct {
   const char (*rows)[MAP_W + 1];     // the map letters
@@ -105,7 +127,23 @@ typedef struct {                     // one kind of wild POKEMON
   const char* name;
   unsigned short body, accent;       // colors of the 'B' and 'A' pixels below
   const char* art;                   // placeholder picture: 8x8 = 64 letters
+  unsigned char hp_base;             // wild HP = hp_base + 2 * level
+  unsigned char move;                // the move it attacks with (MV_...)
 } Species;
+
+typedef struct {                     // one attack
+  const char* name;
+  unsigned char power;               // bigger = more damage
+} Move;
+
+typedef struct {                     // one POKEMON in a battle (yours or wild)
+  unsigned char species;             // SP_... (name and picture come from there)
+  unsigned char level;
+  int hp, max_hp;
+  unsigned short exp;                // experience points collected
+  unsigned char num_moves;           // how many entries of move[] are used
+  unsigned char move[MAX_MOVES];     // MV_...
+} Mon;
 
 typedef struct {                     // one line of an encounter table
   unsigned char species;             // SP_...
@@ -137,6 +175,7 @@ extern const Door warps[];
 extern const Species species[NUM_SPECIES];
 extern const Zone zones[];
 extern const Npc npcs[];
+extern const Move moves[NUM_MOVES];
 extern const Room rooms[NUM_ROOMS];
 
 // data.c: pixel art and font
@@ -156,6 +195,14 @@ extern int cur_room;
 extern int walk_frame;
 extern int walk_timer;
 extern int wild_species;   // species of the current wild encounter (SP_...), -1 = none
+extern Mon player_mon;     // your PIKACHU (keeps its HP and EXP between battles)
+extern Mon wild_mon;       // the wild POKEMON you are fighting right now
+extern int bt_state;       // BS_...: what the bottom box is doing
+extern int bt_cursor;      // which menu line is chosen (0 = first)
+extern int bt_after;       // AFTER_...: what happens when A closes the message
+extern int bt_redraw;      // BT_HUD / BT_BOX bits: what render.c must redraw
+extern char bt_line1[BT_LINE];   // the two lines of the current battle message
+extern char bt_line2[BT_LINE];
 
 // tiles.c: paint the pictures
 void build_town(void);
@@ -176,6 +223,12 @@ int warp_at_feet(int x, int y);        // warp the trainer is standing on, or -1
 void steps_reset(int x, int y);        // call when arriving in a room
 int step_encounter(int x, int y);      // new tall-grass step: species or -1
 void rng_stir(unsigned int v);         // mix in a number (call every frame)
+void battle_begin(int sp);             // set up a fight against wild species sp
+int battle_input(unsigned short pressed);   // buttons pressed this frame ->
+                                       // BATTLE_GOING / WON / RAN / LOST
+void str_set(char* dst, int size, const char* s);   // tiny text helpers
+void str_add(char* dst, int size, const char* s);   // (no libraries needed)
+void str_add_num(char* dst, int size, int n);
 
 // render.c: drawing and dialogue
 void paint_box(int left, int top, int right, int bottom, int px, int py, int dir);
@@ -183,11 +236,12 @@ void wait_vblank(void);
 void show_map(int x, int y, int dir);
 void dialog_open(int n);
 void dialog_advance(int x, int y, int dir);
-void encounter_start(int sp);                    // show the wild encounter screen
-void encounter_advance(int x, int y, int dir);   // A pressed on that screen
+void battle_screen_open(void);          // draw the whole battle screen
+void battle_redraw(void);              // draw again what bt_redraw asks for
+void battle_close(void);               // the battle screen is no longer up
 
 extern int dlg_open;   // render.c: 1 while a dialogue box is on screen
-extern int enc_open;   // render.c: 1 while the wild encounter screen is showing
+extern int battle_open;   // render.c: 1 while the battle screen is showing
 
 #if DEBUG_HUD
 void lamp(int slot, int on, unsigned short color);
