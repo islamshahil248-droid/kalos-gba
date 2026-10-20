@@ -390,6 +390,39 @@ void build_house2(void) {
   make_npc(tile_gfx[H2_NPC], RGB15(26, 26, 26), RGB15(6, 18, 9),
            RGB15(10, 8, 4), CLEAR);
 }
+// Route 1: the town's grass, path, flowers and tree (same numbers), plus tall
+// grass (slot 3) and a wooden sign (slot 5). Calling build_town first means no
+// grass or tree art is written twice.
+typedef char route_tiles_match_town[((int)RT_GRASS == (int)TW_GRASS &&
+                                     (int)RT_PATH == (int)TW_PATH &&
+                                     (int)RT_FLOWER == (int)TW_FLOWER) ? 1 : -1];
+void build_route1(void) {
+  unsigned short* tall = tile_gfx[RT_TALL];
+  unsigned short* sign = tile_gfx[RT_SIGN];
+  int x, y;
+
+  build_town();
+  copy_tile(tile_gfx[RT_TREE], tile_gfx[TW_TREE]);   // before slot 3 is replaced
+
+  // Tall grass: darker than grass, with light blade tufts.
+  tile_box(tall, 0, 0, TILE, TILE, RGB15(4, 15, 5));
+  for (y = 0; y + 4 <= TILE; y += 5)
+    for (x = ((y / 5) & 1) ? 4 : 0; x + 5 <= TILE; x += 8) {
+      tile_box(tall, x,     y + 2, x + 1, y + 4, RGB15(8, 22, 8));
+      tile_box(tall, x + 2, y,     x + 3, y + 4, RGB15(12, 28, 11));
+      tile_box(tall, x + 4, y + 2, x + 5, y + 4, RGB15(8, 22, 8));
+    }
+  tile_box(tall, 0, 15, TILE, TILE, RGB15(2, 10, 3));
+
+  // Sign: a wooden board on a post, standing on grass.
+  copy_tile(sign, tile_gfx[RT_GRASS]);
+  tile_box(sign, 7, 8, 9, 15, RGB15(14, 8, 4));
+  tile_box(sign, 2, 2, 14, 9, RGB15(14, 8, 4));
+  tile_box(sign, 3, 3, 13, 8, RGB15(27, 19, 10));
+  tile_box(sign, 4, 4, 12, 5, RGB15(14, 8, 4));
+  tile_box(sign, 4, 6, 9, 7, RGB15(14, 8, 4));
+}
+
 void build_sprites(void) {
   int x, y, dir;
   for (y = 0; y < TILE; y++) {
