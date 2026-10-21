@@ -103,8 +103,8 @@ enum { BATTLE_GOING, BATTLE_WON, BATTLE_RAN, BATTLE_LOST, BATTLE_CAUGHT };
 #define BLACKOUT_TX   7
 #define BLACKOUT_TY   8
 typedef struct {
-const char (rows)[MAP_W + 1];
-const char keys;
+const char (*rows)[MAP_W + 1];
+const char *keys;
 const unsigned char* kinds;
 unsigned char solid_from;
 unsigned char checker;
