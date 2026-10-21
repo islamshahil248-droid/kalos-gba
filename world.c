@@ -1,5 +1,5 @@
 // world.c - the rules: turning maps into tiles, collision, doors, finding
-// the person in front of you, wild encounters and the battle rules.
+// the person in front of you, wild encounters, the battle rules, leveling and catching.
 #include "game.h"
 
 // Turn map letters into tile numbers (unknown letters: tile 0).
@@ -193,9 +193,10 @@ int step_encounter(int x, int y) {
 // ---------- Battles ----------
 // The battle is a tiny state machine. bt_state says what the bottom box shows:
 //   BS_MESSAGE  two lines of text; A closes them and then bt_after happens
-//   BS_MENU     FIGHT / RUN
+//   BS_MENU     FIGHT / CATCH / RUN
 //   BS_MOVES    the list of your moves
 // Every turn goes: you attack -> (if it survives) it attacks -> back to menu.
+// A Poke Ball throw also uses up your turn: if it fails, the wild one attacks.
 // This file only changes numbers and text; render.c draws them (bt_redraw
 // tells it what is out of date).
 
@@ -226,10 +227,43 @@ void str_add_num(char* dst, int size, int v) {
 
 static const char* mon_name(const Mon* m) { return species[m->species].name; }
 
-// Heal your POKEMON: full HP. (The nurse calls this; so does fainting.)
-// EXP is kept, nothing else changes.
+// Heal every POKEMON in your party to full HP. (The nurse calls this; so does
+// fainting.) EXP, levels and Poke Balls are kept, nothing else changes.
 void heal_party(void) {
-  player_mon.hp = player_mon.max_hp;
+  int i;
+  for (i = 0; i < party_count; i++) party[i].hp = party[i].max_hp;
+}
+
+// ---------- Leveling rules ----------
+// EXP you must collect to go from `level` to `level + 1`: 20 + 4 per level.
+// (Level 5 needs 40, level 6 needs 44, level 10 needs 60 ...)
+// Your EXP number counts only the progress toward the NEXT level: it starts
+// again from the leftover after every level-up.
+int exp_to_next(int level) {
+  return 20 + 4 * level;
+}
+
+// Maximum HP of PIKACHU at a level: 10 + 2 per level (level 5 = 20 HP).
+static int max_hp_for_level(int level) {
+  return 10 + 2 * level;
+}
+
+// ---------- The party ----------
+// Copy a POKEMON into the next free party slot. Returns the slot number, or
+// -1 if the party is already full (PARTY_MAX). It keeps species, level, HP...
+int party_add(const Mon* m) {
+  Mon* d;
+  int i;
+  if (party_count >= PARTY_MAX) return -1;
+  d = &party[party_count];
+  d->species = m->species;
+  d->level = m->level;
+  d->hp = m->hp;
+  d->max_hp = m->max_hp;
+  d->exp = m->exp;
+  d->num_moves = m->num_moves;
+  for (i = 0; i < MAX_MOVES; i++) d->move[i] = m->move[i];
+  return party_count++;
 }
 
 // Show a two-line message; `after` says what happens when A closes it.
@@ -313,6 +347,83 @@ static void enemy_attack(void) {
              (player_mon.hp <= 0) ? AFTER_LOSE : AFTER_MENU);
 }
 
+// ---------- Catching ----------
+// Chance (in percent) that a thrown ball works: 15% against a POKEMON with
+// full HP, rising to about 80% when it is almost fainted.
+static int catch_chance(void) {
+  return 15 + 65 * (wild_mon.max_hp - wild_mon.hp) / wild_mon.max_hp;
+}
+
+// CATCH was chosen. If a ball can really be thrown, use one up and show the
+// throw message; the result comes after A (AFTER_CATCH). If not, explain why:
+// nothing is used up and it is still your turn.
+static void throw_ball(void) {
+  char b[BT_LINE];
+  if (party_count >= PARTY_MAX) {
+    say(AFTER_MENU, "Your party is full!", "You can't catch more POKEMON.");
+    return;
+  }
+  if (pokeballs <= 0) {
+    say(AFTER_MENU, "You have no Poke Balls left!", "Nothing was thrown.");
+    return;
+  }
+  pokeballs--;
+  str_set(b, BT_LINE, "Poke Balls left: ");
+  str_add_num(b, BT_LINE, pokeballs);
+  say(AFTER_CATCH, "You threw a Poke Ball!", b);
+}
+
+// The ball landed: roll the dice. Caught = it joins the party and the battle
+// ends WITHOUT the wild one attacking. Broke free = the wild one attacks.
+static void catch_result(void) {
+  char l1[BT_LINE], l2[BT_LINE];
+  int slot = -1;
+  if ((int)(rng_next() % 100u) < catch_chance()) slot = party_add(&wild_mon);
+  if (slot >= 0) {
+    str_set(l1, BT_LINE, "Gotcha! ");
+    str_add(l1, BT_LINE, mon_name(&wild_mon));
+    str_add(l1, BT_LINE, " was caught!");
+    str_set(l2, BT_LINE, "Added to your party (");
+    str_add_num(l2, BT_LINE, party_count);
+    str_add(l2, BT_LINE, "/");
+    str_add_num(l2, BT_LINE, PARTY_MAX);
+    str_add(l2, BT_LINE, ").");
+    say(AFTER_END_CAUGHT, l1, l2);
+  } else {
+    str_set(l1, BT_LINE, "Oh no! ");
+    str_add(l1, BT_LINE, mon_name(&wild_mon));
+    str_add(l1, BT_LINE, " broke free!");
+    say(AFTER_ENEMY, l1, "");
+  }
+}
+
+// ---------- Level-up ----------
+// PIKACHU has enough EXP for the next level: pay the EXP, go up one level,
+// raise max HP (and the current HP by the same amount, so a hurt PIKACHU stays
+// hurt) and show the news. Attacks get stronger by themselves because
+// calc_damage() uses the level.
+static void level_up(void) {
+  char l1[BT_LINE], l2[BT_LINE];
+  int old_max = player_mon.max_hp, new_max;
+  player_mon.exp = (unsigned short)(player_mon.exp - exp_to_next(player_mon.level));
+  player_mon.level = (unsigned char)(player_mon.level + 1);
+  new_max = max_hp_for_level(player_mon.level);
+  player_mon.max_hp = new_max;
+  player_mon.hp += new_max - old_max;
+  if (player_mon.hp > new_max) player_mon.hp = new_max;   // stay inside 1..max
+  if (player_mon.hp < 1) player_mon.hp = 1;
+  if (player_mon.level >= MAX_LEVEL) player_mon.exp = 0;  // nothing left to earn
+  str_set(l1, BT_LINE, mon_name(&player_mon));
+  str_add(l1, BT_LINE, " grew to Lv");
+  str_add_num(l1, BT_LINE, player_mon.level);
+  str_add(l1, BT_LINE, "!");
+  str_set(l2, BT_LINE, "Max HP ");
+  str_add_num(l2, BT_LINE, new_max);
+  str_add(l2, BT_LINE, ". Attack went up!");
+  say(AFTER_LEVELUP, l1, l2);          // asks again: maybe another level is due
+  bt_redraw |= BT_HUD;
+}
+
 // Call once per frame with the buttons that were JUST pressed this frame
 // (not held). Returns BATTLE_GOING until the battle is over.
 int battle_input(unsigned short pressed) {
@@ -324,12 +435,21 @@ int battle_input(unsigned short pressed) {
   if (pressed & (KEY_UP | KEY_LEFT)) step = -1;
 
   if (bt_state == BS_MENU) {
-    if (step != 0) { bt_cursor = 1 - bt_cursor; bt_redraw |= BT_BOX; }   // FIGHT <-> RUN
+    // The menu is   FIGHT  CATCH     (bt_cursor 0, 1)
+    //               RUN              (bt_cursor 2)
+    int pos = bt_cursor;
+    if ((pressed & KEY_RIGHT) && pos == MENU_FIGHT) pos = MENU_CATCH;
+    if ((pressed & KEY_LEFT)  && pos == MENU_CATCH) pos = MENU_FIGHT;
+    if ((pressed & KEY_DOWN)  && pos == MENU_FIGHT) pos = MENU_RUN;
+    if ((pressed & KEY_UP)    && pos == MENU_RUN)   pos = MENU_FIGHT;
+    if (pos != bt_cursor) { bt_cursor = pos; bt_redraw |= BT_BOX; }
     if (a) {
-      if (bt_cursor == 0) {                               // FIGHT
+      if (bt_cursor == MENU_FIGHT) {
         bt_state = BS_MOVES;
         bt_cursor = 0;
         bt_redraw |= BT_BOX;
+      } else if (bt_cursor == MENU_CATCH) {
+        throw_ball();
       } else {                                            // RUN: always works
         say(AFTER_END_RAN, "Got away safely!", "");
       }
@@ -351,25 +471,40 @@ int battle_input(unsigned short pressed) {
         break;
       case AFTER_WIN: {                                   // the wild one fainted
         int gain = 5 + 2 * wild_mon.level;
-        player_mon.exp = (unsigned short)(player_mon.exp + gain);
         str_set(l1, BT_LINE, "Wild ");
         str_add(l1, BT_LINE, mon_name(&wild_mon));
         str_add(l1, BT_LINE, " fainted!");
         str_set(l2, BT_LINE, mon_name(&player_mon));
-        str_add(l2, BT_LINE, " gained ");
-        str_add_num(l2, BT_LINE, gain);
-        str_add(l2, BT_LINE, " Exp. Points!");
-        say(AFTER_END_WON, l1, l2);
+        if (player_mon.level >= MAX_LEVEL) {
+          str_add(l2, BT_LINE, " is at max level!");
+        } else {
+          player_mon.exp = (unsigned short)(player_mon.exp + gain);
+          str_add(l2, BT_LINE, " gained ");
+          str_add_num(l2, BT_LINE, gain);
+          str_add(l2, BT_LINE, " Exp. Points!");
+        }
+        say(AFTER_LEVELUP, l1, l2);
         bt_redraw |= BT_HUD;                              // new EXP number
         break;
       }
+      case AFTER_LEVELUP:                                 // enough EXP? level up
+        if (player_mon.level < MAX_LEVEL &&               // (repeats if EXP is
+            player_mon.exp >= (unsigned short)exp_to_next(player_mon.level))
+          level_up();                                     //  enough for several)
+        else
+          return BATTLE_WON;
+        break;
+      case AFTER_CATCH:
+        catch_result();
+        break;
       case AFTER_LOSE:                                    // your POKEMON fainted
         str_set(l1, BT_LINE, mon_name(&player_mon));
         str_add(l1, BT_LINE, " fainted!");
         say(AFTER_END_LOST, l1, "You rushed to the POKEMON CENTER!");
         break;
-      case AFTER_END_WON:  return BATTLE_WON;
-      case AFTER_END_RAN:  return BATTLE_RAN;
+      case AFTER_END_WON:    return BATTLE_WON;
+      case AFTER_END_RAN:    return BATTLE_RAN;
+      case AFTER_END_CAUGHT: return BATTLE_CAUGHT;
       case AFTER_END_LOST:
         heal_party();                                     // healed at the CENTER
         return BATTLE_LOST;
