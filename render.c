@@ -257,7 +257,13 @@ static void draw_mon_panel(const Mon* m, int x, int y, int is_player) {
   draw_line(x + 84, y + 14, buf);
   if (is_player) {
     str_set(buf, (int)sizeof(buf), "EXP ");
-    str_add_num(buf, (int)sizeof(buf), m->exp);
+    if (m->level >= MAX_LEVEL) {
+      str_add(buf, (int)sizeof(buf), "MAX");
+    } else {                                   // progress toward the next level
+      str_add_num(buf, (int)sizeof(buf), m->exp);
+      str_add(buf, (int)sizeof(buf), "/");
+      str_add_num(buf, (int)sizeof(buf), exp_to_next(m->level));
+    }
     draw_line(x + 6, y + 25, buf);
   }
 }
@@ -300,10 +306,16 @@ static void draw_battle_box(void) {
     str_set(buf, BT_LINE, species[player_mon.species].name);
     str_add(buf, BT_LINE, " do?");
     draw_line(DLG_X + 10, DLG_Y + 21, buf);
-    draw_subbox(120);
-    draw_line(DLG_X + 140, DLG_Y + 8, "FIGHT");
-    draw_line(DLG_X + 140, DLG_Y + 21, "RUN");
-    draw_cursor(DLG_X + 129, DLG_Y + 9 + bt_cursor * 13);
+    draw_subbox(104);
+    // Two columns:  FIGHT  CATCH   (bt_cursor 0, 1)
+    //               RUN    Ball:5  (bt_cursor 2; the ball count is not a choice)
+    draw_line(DLG_X + 123, DLG_Y + 8, "FIGHT");
+    draw_line(DLG_X + 167, DLG_Y + 8, "CATCH");
+    draw_line(DLG_X + 123, DLG_Y + 21, "RUN");
+    str_set(buf, BT_LINE, "Ball:");
+    str_add_num(buf, BT_LINE, pokeballs);
+    draw_line(DLG_X + 167, DLG_Y + 21, buf);
+    draw_cursor(DLG_X + 113 + (bt_cursor & 1) * 44, DLG_Y + 9 + (bt_cursor >> 1) * 13);
   } else {                                           // BS_MOVES
     for (i = 0; i < player_mon.num_moves; i++)
       draw_line(DLG_X + 26, DLG_Y + 8 + i * 13, moves[player_mon.move[i]].name);
