@@ -1,5 +1,5 @@
 // GBA town with 4 enterable buildings, NPCs, dialogue, Route 1 and
-// wild POKEMON encounters and turn-based battles.
+// wild POKEMON encounters, turn-based battles, leveling and catching.
 // Mode 3, 240x160, devkitARM, no libraries.
 //
 // game.h - shared by every .c file: constants, types, and the list of what
@@ -84,14 +84,22 @@ enum { SP_PIDGEY, SP_RATTATA, SP_CATERPIE, SP_PIKACHU, NUM_SPECIES };
 // ---- Battles ----
 enum { MV_THUNDER_SHOCK, MV_QUICK_ATTACK, MV_TACKLE, MV_GUST, NUM_MOVES };
 #define MAX_MOVES 4         // moves one POKEMON can know
+#define PARTY_MAX   6       // POKEMON you can carry at once
+#define MAX_LEVEL   40      // PIKACHU stops growing here (keeps HP at 2 digits)
+#define START_BALLS 5       // Poke Balls you begin the game with
+// The lines of the battle menu (this is what bt_cursor means in BS_MENU):
+enum { MENU_FIGHT, MENU_CATCH, MENU_RUN };
 #define BT_LINE   36        // one battle message line (34 letters + the end mark)
 // What the bottom box of the battle screen is doing:
 enum { BS_MESSAGE, BS_MENU, BS_MOVES };   // text / FIGHT-RUN menu / move list
 // What happens after the player closes a message with A:
 enum { AFTER_MENU, AFTER_ENEMY, AFTER_WIN, AFTER_LOSE,
-       AFTER_END_WON, AFTER_END_RAN, AFTER_END_LOST };
+       AFTER_END_WON, AFTER_END_RAN, AFTER_END_LOST,
+       AFTER_LEVELUP,         // check for a level-up (or end the battle)
+       AFTER_CATCH,           // the ball was thrown: did it work?
+       AFTER_END_CAUGHT };
 // What battle_input() reports back to main:
-enum { BATTLE_GOING, BATTLE_WON, BATTLE_RAN, BATTLE_LOST };
+enum { BATTLE_GOING, BATTLE_WON, BATTLE_RAN, BATTLE_LOST, BATTLE_CAUGHT };
 // Bits of bt_redraw: which part of the battle screen must be drawn again.
 #define BT_HUD 1            // the two info panels (names, HP bars, numbers)
 #define BT_BOX 2            // the message / menu box at the bottom
@@ -196,7 +204,13 @@ extern int cur_room;
 extern int walk_frame;
 extern int walk_timer;
 extern int wild_species;   // species of the current wild encounter (SP_...), -1 = none
-extern Mon player_mon;     // your PIKACHU (keeps its HP and EXP between battles)
+// Your POKEMON. party[0] is PIKACHU, the one that fights. party_count is how
+// many slots are used (1 to PARTY_MAX). Caught POKEMON are added at the end;
+// a party menu can use this array later.
+extern Mon party[PARTY_MAX];
+extern int party_count;
+#define player_mon (party[0])    // "the POKEMON that fights" = first in the party
+extern int pokeballs;      // Poke Balls left
 extern Mon wild_mon;       // the wild POKEMON you are fighting right now
 extern int bt_state;       // BS_...: what the bottom box is doing
 extern int bt_cursor;      // which menu line is chosen (0 = first)
@@ -223,7 +237,9 @@ void pick_start(int stx, int sty, int* out_x, int* out_y);
 int warp_at_feet(int x, int y);        // warp the trainer is standing on, or -1
 void steps_reset(int x, int y);        // call when arriving in a room
 int step_encounter(int x, int y);      // new tall-grass step: species or -1
-void heal_party(void);                 // PIKACHU back to full HP (nurse, fainting)
+void heal_party(void);                 // every POKEMON in the party back to full HP
+int exp_to_next(int level);            // EXP needed to go from `level` to the next
+int party_add(const Mon* m);           // add a POKEMON to the party: slot or -1 if full
 void rng_stir(unsigned int v);         // mix in a number (call every frame)
 void battle_begin(int sp);             // set up a fight against wild species sp
 int battle_input(unsigned short pressed);   // buttons pressed this frame ->
