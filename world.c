@@ -1,247 +1,440 @@
-// game.h - shared definitions across all modules including game states,
-// menu structures, party data, and rendering functions.
-#ifndef GAME_H
-#define GAME_H
-#define REG_DISPCNT  ((volatile unsigned short)0x04000000)
-#define REG_VCOUNT   ((volatile unsigned short)0x04000006)
-#define REG_KEYINPUT ((volatile unsigned short)0x04000130)
-#define VRAM ((volatile unsigned short*)0x06000000)
-#define RGB15(r, g, b) ((r) | ((g) << 5) | ((b) << 10))
-#define KEY_A      0x0001
-#define KEY_B      0x0002
-#define KEY_SELECT 0x0004
-#define KEY_START  0x0008
-#define KEY_RIGHT  0x0010
-#define KEY_LEFT   0x0020
-#define KEY_UP     0x0040
-#define KEY_DOWN   0x0080
-#define DEBUG_HUD 0
-#define SCREEN_W 240
-#define SCREEN_H 160
-#define TILE     16
-#define MAP_W    15
-#define MAP_H    10
-#define SPEED    2
-#define START_TX 6
-#define START_TY 8
-#define HB_LEFT   2
-#define HB_RIGHT  13
-#define HB_TOP    1
-#define HB_BOTTOM 15
-#define CLEAR   0x8000
-#define OUTLINE RGB15(2, 2, 5)
-#define WHITE   RGB15(31, 31, 31)
-#define BLACK   RGB15(0, 0, 0)
-#define GRAY    RGB15(15, 15, 15)
-#define LIGHT_GRAY RGB15(24, 24, 24)
-#define RED     RGB15(31, 5, 5)
-#define GREEN   RGB15(5, 28, 5)
-#define BLUE    RGB15(5, 12, 30)
-#define DIR_DOWN  0
-#define DIR_UP    1
-#define DIR_LEFT  2
-#define DIR_RIGHT 3
-// Game Engine Overall States
-enum {
-GM_WORLD,
-GM_BATTLE,
-GM_MAIN_MENU,
-GM_PARTY_MENU,
-GM_SUB_MENU
-};
-// Main Menu Options
-enum {
-MM_POKEDEX,
-MM_POKEMON,
-MM_BAG,
-MM_TRAINER,
-MM_SAVE,
-MM_OPTIONS,
-MM_CLOSE,
-MM_COUNT
-};
-// Rooms
-enum { R_TOWN, R_CENTER, R_MART, R_HOUSE1, R_HOUSE2, R_ROUTE1, NUM_ROOMS };
-// Town tiles
-enum {
-TW_GRASS, TW_PATH, TW_FLOWER, TW_TREE,
-TW_ROOF_H1, TW_ROOF_H2, TW_WALL_H, TW_DOOR_H,
-TW_ROOF_C, TW_SIGN_C, TW_WALL_C, TW_DOOR_C,
-TW_ROOF_M, TW_SIGN_M, TW_WALL_M, TW_DOOR_M,
-TW_NPC_A, TW_NPC_B,
-MAX_TILES
-};
-enum { IC_FA, IC_FB, IC_MAT, IC_WALL, IC_SIGN, IC_CNT, IC_CNTF, IC_MCH_T, IC_MCH_B, IC_PLANT, IC_DOOR, IC_NPC };
-enum { IM_FA, IM_FB, IM_MAT, IM_WALL, IM_SIGN, IM_DOOR, IM_CNT, IM_CNTF, IM_SHELF_A, IM_SHELF_B, IM_NPC, IM_PLANT };
-enum { H1_FA, H1_FB, H1_RUG, H1_WALL, H1_WIN, H1_DOOR, H1_BED_H, H1_BED_F, H1_TABLE, H1_CHAIR, H1_PLANT, H1_NPC };
-enum { H2_FA, H2_FB, H2_RUG, H2_WALL, H2_WIN, H2_DOOR, H2_SHELF_A, H2_SHELF_B, H2_BED_H, H2_BED_F, H2_TABLE, H2_CHAIR, H2_PLANT, H2_NPC };
-#define SOLID_INSIDE 3
-enum { RT_GRASS, RT_PATH, RT_FLOWER, RT_TALL, RT_TREE, RT_SIGN };
-#define NO_TILE 255
-enum { SP_PIDGEY, SP_RATTATA, SP_CATERPIE, SP_PIKACHU, NUM_SPECIES };
-#define ENC_COOLDOWN_STEPS 3
-// Moves and Party
-enum { MV_THUNDER_SHOCK, MV_QUICK_ATTACK, MV_TACKLE, MV_GUST, NUM_MOVES };
-#define MAX_MOVES 4
-#define PARTY_MAX 6
-#define MAX_LEVEL 40
-#define START_BALLS 5
-// Battle state
-enum { MENU_FIGHT, MENU_POKEMON_SWAP, MENU_CATCH, MENU_RUN };
-#define BT_LINE 36
-enum { BS_MESSAGE, BS_MENU, BS_MOVES };
-enum {
-AFTER_MENU, AFTER_ENEMY, AFTER_WIN, AFTER_LOSE,
-AFTER_END_WON, AFTER_END_RAN, AFTER_END_LOST,
-AFTER_LEVELUP, AFTER_CATCH, AFTER_END_CAUGHT,
-AFTER_MUST_SWITCH, AFTER_SWITCH_TURN
-};
-enum { BATTLE_GOING, BATTLE_WON, BATTLE_RAN, BATTLE_LOST, BATTLE_CAUGHT };
-#define BT_HUD 1
-#define BT_BOX 2
-#define BLACKOUT_ROOM R_CENTER
-#define BLACKOUT_TX   7
-#define BLACKOUT_TY   8
-typedef struct {
-const char (rows)[MAP_W + 1];
-const char keys;
-const unsigned char* kinds;
-unsigned char solid_from;
-unsigned char checker;
-unsigned char tall;
-void (*build)(void);
-} Room;
-typedef struct {
-unsigned char from, tx, ty;
-unsigned char to, sx, sy, sdir;
-} Door;
-typedef struct {
-unsigned char room, tx, ty;
-unsigned char reach;
-const char* text;
-unsigned char heals;
-} Npc;
-typedef struct {
-const char* name;
-unsigned short body, accent;
-const char* art;
-unsigned char hp_base;
-unsigned char move;
-} Species;
-typedef struct {
-const char* name;
-unsigned char power;
-} Move;
-typedef struct {
-unsigned char species;
-unsigned char level;
-int hp, max_hp;
-unsigned short exp;
-unsigned char num_moves;
-unsigned char move[MAX_MOVES];
-} Mon;
-typedef struct {
-unsigned char species;
-unsigned char weight;
-} WildEntry;
-typedef struct {
-unsigned char room;
-unsigned char percent;
-unsigned char count;
-const WildEntry* entries;
-} Zone;
-#define NUM_DOORS num_doors
-#define NUM_NPCS  num_npcs
-#define NUM_WARPS num_warps
-#define NUM_ZONES num_zones
-// Shared Declarations
-extern const int num_doors;
-extern const int num_npcs;
-extern const int num_warps;
-extern const int num_zones;
-extern const Door doors[];
-extern const Door warps[];
-extern const Species species[NUM_SPECIES];
-extern const Zone zones[];
-extern const Npc npcs[];
-extern const Move moves[NUM_MOVES];
-extern const Room rooms[NUM_ROOMS];
-extern const char art_down[16][17];
-extern const char art_up[16][17];
-extern const char art_left[16][17];
-extern const char art_tree[16][17];
-extern const char glyph_p[];
-extern const char glyph_m[];
-extern const unsigned char font5x8[91][5];
-extern unsigned short tile_gfx[MAX_TILES][TILE * TILE];
-extern unsigned short sprite_gfx[4][2][TILE * TILE];
-extern unsigned char map_kind[NUM_ROOMS][MAP_H][MAP_W];
-extern int cur_room;
-extern int walk_frame;
-extern int walk_timer;
-extern int wild_species;
-extern Mon party[PARTY_MAX];
-extern int party_count;
-extern int active_mon_idx;
-#define player_mon (party[active_mon_idx])
-extern int pokeballs;
-extern Mon wild_mon;
-extern int bt_state;
-extern int bt_cursor;
-extern int bt_after;
-extern int bt_redraw;
-extern char bt_line1[BT_LINE];
-extern char bt_line2[BT_LINE];
-// Game Management States
-extern int game_state;
-extern int main_menu_cursor;
-extern int party_menu_cursor;
-extern int sub_menu_type;
-// Functions
-void build_town(void);
-void build_center(void);
-void build_mart(void);
-void build_house1(void);
-void build_house2(void);
-void build_route1(void);
-void build_sprites(void);
-void build_map(int m);
-int can_stand(int px, int py);
-int front_door(int x, int y, int dir);
-int front_npc(int x, int y, int dir);
-void pick_start(int stx, int sty, int* out_x, int* out_y);
-int warp_at_feet(int x, int y);
-void steps_reset(int x, int y);
-int step_encounter(int x, int y);
-void heal_party(void);
-int has_alive_mon(void);
-int exp_to_next(int level);
-int party_add(const Mon* m);
-int switch_active_mon(int new_idx);
-void rng_stir(unsigned int v);
-void battle_begin(int sp);
-int battle_input(unsigned short pressed);
-void str_set(char* dst, int size, const char* s);
-void str_add(char* dst, int size, const char* s);
-void str_add_num(char* dst, int size, int n);
-// Rendering & UI
-void paint_box(int left, int top, int right, int bottom, int px, int py, int dir);
-void wait_vblank(void);
-void show_map(int x, int y, int dir);
-void dialog_open(int n);
-void dialog_advance(int x, int y, int dir);
-void battle_screen_open(void);
-void battle_redraw(void);
-void battle_close(void);
-void render_main_menu(void);
-void render_party_screen(int is_battle);
-void render_sub_screen(int type);
-void draw_text(int x, int y, const char* text, unsigned short color);
-void draw_fill_rect(int x1, int y1, int x2, int y2, unsigned short color);
-extern int dlg_open;
-extern int battle_open;
-#if DEBUG_HUD
-void lamp(int slot, int on, unsigned short color);
-void show_lamps(unsigned int frame, unsigned short keys, int moved, int blocked);
-#endif
-#endif
+// world.c - collision, interaction, party switching, battle logic and EXP attribution
+#include "game.h"
+void build_map(int m) {
+const Room* r = &rooms[m];
+int tx, ty, i;
+for (ty = 0; ty < MAP_H; ty++) {
+for (tx = 0; tx < MAP_W; tx++) {
+int k = 0;
+for (i = 0; r->keys[i]; i++)
+if (r->keys[i] == r->rows[ty][tx]) { k = r->kinds[i]; break; }
+if (r->checker && k == 0 && ((tx + ty) & 1)) k = 1;
+map_kind[m][ty][tx] = (unsigned char)k;
+}
+}
+}
+static int tile_at(int px, int py) {
+if (px < 0 || py < 0 || px >= SCREEN_W || py >= SCREEN_H) return -1;
+return map_kind[cur_room][py >> 4][px >> 4];
+}
+static int is_blocked(int px, int py) {
+int k = tile_at(px, py);
+return k < 0 || k >= rooms[cur_room].solid_from;
+}
+int can_stand(int px, int py) {
+return !is_blocked(px + HB_LEFT,  py + HB_TOP) &&
+!is_blocked(px + HB_RIGHT, py + HB_TOP) &&
+!is_blocked(px + HB_LEFT,  py + HB_BOTTOM) &&
+!is_blocked(px + HB_RIGHT, py + HB_BOTTOM);
+}
+static int door_at(int px, int py) {
+int i, tx, ty;
+if (px < 0 || py < 0 || px >= SCREEN_W || py >= SCREEN_H) return -1;
+tx = px >> 4;
+ty = py >> 4;
+for (i = 0; i < NUM_DOORS; i++)
+if (doors[i].from == cur_room && doors[i].tx == tx && doors[i].ty == ty)
+return i;
+return -1;
+}
+int front_door(int x, int y, int dir) {
+int ax, ay, bx, by, d;
+if (dir == DIR_UP)        { ay = by = y + HB_TOP - 3;    ax = x + HB_LEFT + 2; bx = x + HB_RIGHT - 2; }
+else if (dir == DIR_DOWN) { ay = by = y + HB_BOTTOM + 3; ax = x + HB_LEFT + 2; bx = x + HB_RIGHT - 2; }
+else if (dir == DIR_LEFT) { ax = bx = x + HB_LEFT - 3;   ay = y + HB_TOP + 2;  by = y + HB_BOTTOM - 2; }
+else                      { ax = bx = x + HB_RIGHT + 3;  ay = y + HB_TOP + 2;  by = y + HB_BOTTOM - 2; }
+d = door_at(ax, ay);
+if (d < 0) d = door_at(bx, by);
+return d;
+}
+void pick_start(int stx, int sty, int* out_x, int* out_y) {
+int tx, ty;
+*out_x = stx * TILE;
+*out_y = sty * TILE;
+if (can_stand(*out_x, *out_y)) return;
+for (ty = 0; ty < MAP_H; ty++) {
+for (tx = 0; tx < MAP_W; tx++) {
+if (can_stand(tx * TILE, ty * TILE)) {
+*out_x = tx * TILE;
+*out_y = ty * TILE;
+return;
+}
+}
+}
+}
+static int npc_at(int tx, int ty) {
+int i;
+for (i = 0; i < NUM_NPCS; i++)
+if (npcs[i].room == cur_room && npcs[i].tx == tx && npcs[i].ty == ty)
+return i;
+return -1;
+}
+static int npc_ahead(int ax, int ay, int dx, int dy) {
+int tx, ty, step, i;
+if (ax < 0 || ay < 0 || ax >= SCREEN_W || ay >= SCREEN_H) return -1;
+tx = ax >> 4;
+ty = ay >> 4;
+for (step = 1; step <= 3; step++) {
+i = npc_at(tx, ty);
+if (i >= 0) return (step <= npcs[i].reach) ? i : -1;
+if (map_kind[cur_room][ty][tx] < rooms[cur_room].solid_from) return -1;
+tx += dx;
+ty += dy;
+if (tx < 0 || ty < 0 || tx >= MAP_W || ty >= MAP_H) return -1;
+}
+return -1;
+}
+int front_npc(int x, int y, int dir) {
+int ax, ay, bx, by, dx = 0, dy = 0, i;
+if (dir == DIR_UP)        { ay = by = y + HB_TOP - 3;    ax = x + HB_LEFT + 2; bx = x + HB_RIGHT - 2; dy = -1; }
+else if (dir == DIR_DOWN) { ay = by = y + HB_BOTTOM + 3; ax = x + HB_LEFT + 2; bx = x + HB_RIGHT - 2; dy = 1; }
+else if (dir == DIR_LEFT) { ax = bx = x + HB_LEFT - 3;   ay = y + HB_TOP + 2;  by = y + HB_BOTTOM - 2; dx = -1; }
+else                      { ax = bx = x + HB_RIGHT + 3;  ay = y + HB_TOP + 2;  by = y + HB_BOTTOM - 2; dx = 1; }
+i = npc_ahead(ax, ay, dx, dy);
+if (i < 0) i = npc_ahead(bx, by, dx, dy);
+return i;
+}
+static int last_step_tx = -1, last_step_ty = -1;
+static int enc_cooldown = 0;
+static unsigned int rng_state = 0x2545F491u;
+void rng_stir(unsigned int v) {
+rng_state ^= v + 0x9E3779B9u + (rng_state << 6) + (rng_state >> 2);
+if (rng_state == 0) rng_state = 1;
+}
+static unsigned int rng_next(void) {
+rng_state ^= rng_state << 13;
+rng_state ^= rng_state >> 17;
+rng_state ^= rng_state << 5;
+return rng_state;
+}
+static int foot_tx(int x) { return (x + 8) >> 4; }
+static int foot_ty(int y) { return (y + HB_BOTTOM - 2) >> 4; }
+int warp_at_feet(int x, int y) {
+int i, tx = foot_tx(x), ty = foot_ty(y);
+for (i = 0; i < NUM_WARPS; i++)
+if (warps[i].from == cur_room && warps[i].tx == tx && warps[i].ty == ty)
+return i;
+return -1;
+}
+void steps_reset(int x, int y) {
+last_step_tx = foot_tx(x);
+last_step_ty = foot_ty(y);
+enc_cooldown = 0;
+}
+int step_encounter(int x, int y) {
+int tx = foot_tx(x), ty = foot_ty(y), i, total, r;
+const Zone* z = 0;
+if (tx == last_step_tx && ty == last_step_ty) return -1;
+last_step_tx = tx;
+last_step_ty = ty;
+if (tx < 0 || ty < 0 || tx >= MAP_W || ty >= MAP_H) return -1;
+if (rooms[cur_room].tall == NO_TILE || map_kind[cur_room][ty][tx] != rooms[cur_room].tall) return -1;
+if (enc_cooldown > 0) { enc_cooldown--; return -1; }
+for (i = 0; i < NUM_ZONES; i++)
+if (zones[i].room == cur_room) z = &zones[i];
+if (!z) return -1;
+if ((int)(rng_next() % 100) >= z->percent) return -1;
+total = 0;
+for (i = 0; i < z->count; i++) total += z->entries[i].weight;
+if (total <= 0) return -1;
+r = (int)(rng_next() % (unsigned int)total);
+for (i = 0; i < z->count; i++) {
+if (r < z->entries[i].weight) {
+enc_cooldown = ENC_COOLDOWN_STEPS;
+return z->entries[i].species;
+}
+r -= z->entries[i].weight;
+}
+return -1;
+}
+void str_add(char* dst, int size, const char* s) {
+int n = 0;
+while (dst[n]) n++;
+while (*s && n < size - 1) dst[n++] = *s++;
+dst[n] = '\0';
+}
+void str_set(char* dst, int size, const char* s) {
+dst[0] = '\0';
+str_add(dst, size, s);
+}
+void str_add_num(char* dst, int size, int v) {
+char digits[12], one[2];
+int n = 0, i;
+if (v < 0) v = 0;
+if (v == 0) digits[n++] = '0';
+while (v > 0 && n < 11) { digits[n++] = (char)('0' + v % 10); v /= 10; }
+one[1] = '\0';
+for (i = n - 1; i >= 0; i--) { one[0] = digits[i]; str_add(dst, size, one); }
+}
+static const char* mon_name(const Mon* m) { return species[m->species].name; }
+void heal_party(void) {
+int i;
+for (i = 0; i < party_count; i++) party[i].hp = party[i].max_hp;
+}
+int has_alive_mon(void) {
+int i;
+for (i = 0; i < party_count; i++) {
+if (party[i].hp > 0) return 1;
+}
+return 0;
+}
+int exp_to_next(int level) {
+return 20 + 4 * level;
+}
+static int max_hp_for_level(int species_idx, int level) {
+return species[species_idx].hp_base + 2 * level;
+}
+int party_add(const Mon* m) {
+Mon* d;
+int i;
+if (party_count >= PARTY_MAX) return -1;
+d = &party[party_count];
+d->species = m->species;
+d->level = m->level;
+d->hp = m->hp;
+d->max_hp = m->max_hp;
+d->exp = m->exp;
+d->num_moves = m->num_moves;
+for (i = 0; i < MAX_MOVES; i++) d->move[i] = m->move[i];
+return party_count++;
+}
+int switch_active_mon(int new_idx) {
+if (new_idx < 0 || new_idx >= party_count) return 0;
+if (new_idx == active_mon_idx) return 0;
+if (party[new_idx].hp <= 0) return 0;
+active_mon_idx = new_idx;
+return 1;
+}
+static void say(int after, const char* line1, const char* line2) {
+str_set(bt_line1, BT_LINE, line1);
+str_set(bt_line2, BT_LINE, line2);
+bt_state = BS_MESSAGE;
+bt_after = after;
+bt_redraw |= BT_BOX;
+}
+static int calc_damage(int level, int power) {
+return power * level / 30 + 1 + (int)(rng_next() % 3u);
+}
+static void take_damage(Mon* m, int dmg) {
+m->hp -= dmg;
+if (m->hp < 0) m->hp = 0;
+bt_redraw |= BT_HUD;
+}
+static void say_attack(const Mon* attacker, const Mon* target, int mv, int dmg, int after) {
+char a[BT_LINE], b[BT_LINE];
+str_set(a, BT_LINE, "");
+if (attacker == &wild_mon) str_add(a, BT_LINE, "Wild ");
+str_add(a, BT_LINE, mon_name(attacker));
+str_add(a, BT_LINE, " used ");
+str_add(a, BT_LINE, moves[mv].name);
+str_add(a, BT_LINE, "!");
+str_set(b, BT_LINE, mon_name(target));
+str_add(b, BT_LINE, " took ");
+str_add_num(b, BT_LINE, dmg);
+str_add(b, BT_LINE, " damage.");
+say(after, a, b);
+}
+void battle_begin(int sp) {
+char a[BT_LINE], b[BT_LINE];
+int i;
+wild_species = sp;
+wild_mon.species = (unsigned char)sp;
+wild_mon.level = (unsigned char)(2 + rng_next() % 3u);
+wild_mon.max_hp = species[sp].hp_base + 2 * wild_mon.level;
+wild_mon.hp = wild_mon.max_hp;
+wild_mon.exp = 0;
+wild_mon.num_moves = 1;
+wild_mon.move[0] = species[sp].move;
+// Auto pick first healthy mon
+if (player_mon.hp <= 0) {
+for (i = 0; i < party_count; i++) {
+if (party[i].hp > 0) { active_mon_idx = i; break; }
+}
+}
+if (player_mon.hp <= 0) heal_party();
+bt_cursor = 0;
+bt_redraw = BT_HUD | BT_BOX;
+str_set(a, BT_LINE, "A wild ");
+str_add(a, BT_LINE, mon_name(&wild_mon));
+str_add(a, BT_LINE, " appeared!");
+str_set(b, BT_LINE, "Go! ");
+str_add(b, BT_LINE, mon_name(&player_mon));
+str_add(b, BT_LINE, "!");
+say(AFTER_MENU, a, b);
+}
+static void player_attack(int slot) {
+int mv = player_mon.move[slot];
+int dmg = calc_damage(player_mon.level, moves[mv].power);
+take_damage(&wild_mon, dmg);
+say_attack(&player_mon, &wild_mon, mv, dmg,
+(wild_mon.hp <= 0) ? AFTER_WIN : AFTER_ENEMY);
+}
+static void enemy_attack(void) {
+int mv = wild_mon.move[0];
+int dmg = calc_damage(wild_mon.level, moves[mv].power);
+take_damage(&player_mon, dmg);
+say_attack(&wild_mon, &player_mon, mv, dmg,
+(player_mon.hp <= 0) ? (has_alive_mon() ? AFTER_MUST_SWITCH : AFTER_LOSE) : AFTER_MENU);
+}
+static int catch_chance(void) {
+return 15 + 65 * (wild_mon.max_hp - wild_mon.hp) / wild_mon.max_hp;
+}
+static void throw_ball(void) {
+char b[BT_LINE];
+if (party_count >= PARTY_MAX) {
+say(AFTER_MENU, "Your party is full!", "You can't catch more POKEMON.");
+return;
+}
+if (pokeballs <= 0) {
+say(AFTER_MENU, "You have no Poke Balls left!", "Nothing was thrown.");
+return;
+}
+pokeballs--;
+str_set(b, BT_LINE, "Poke Balls left: ");
+str_add_num(b, BT_LINE, pokeballs);
+say(AFTER_CATCH, "You threw a Poke Ball!", b);
+}
+static void catch_result(void) {
+char l1[BT_LINE], l2[BT_LINE];
+int slot = -1;
+if ((int)(rng_next() % 100u) < catch_chance()) slot = party_add(&wild_mon);
+if (slot >= 0) {
+str_set(l1, BT_LINE, "Gotcha! ");
+str_add(l1, BT_LINE, mon_name(&wild_mon));
+str_add(l1, BT_LINE, " was caught!");
+str_set(l2, BT_LINE, "Added to party (");
+str_add_num(l2, BT_LINE, party_count);
+str_add(l2, BT_LINE, "/");
+str_add_num(l2, BT_LINE, PARTY_MAX);
+str_add(l2, BT_LINE, ").");
+say(AFTER_END_CAUGHT, l1, l2);
+} else {
+str_set(l1, BT_LINE, "Oh no! ");
+str_add(l1, BT_LINE, mon_name(&wild_mon));
+str_add(l1, BT_LINE, " broke free!");
+say(AFTER_ENEMY, l1, "");
+}
+}
+static void level_up(void) {
+char l1[BT_LINE], l2[BT_LINE];
+int old_max = player_mon.max_hp, new_max;
+player_mon.exp = (unsigned short)(player_mon.exp - exp_to_next(player_mon.level));
+player_mon.level = (unsigned char)(player_mon.level + 1);
+new_max = max_hp_for_level(player_mon.species, player_mon.level);
+player_mon.max_hp = new_max;
+player_mon.hp += new_max - old_max;
+if (player_mon.hp > new_max) player_mon.hp = new_max;
+if (player_mon.hp < 1) player_mon.hp = 1;
+if (player_mon.level >= MAX_LEVEL) player_mon.exp = 0;
+str_set(l1, BT_LINE, mon_name(&player_mon));
+str_add(l1, BT_LINE, " grew to Lv");
+str_add_num(l1, BT_LINE, player_mon.level);
+str_add(l1, BT_LINE, "!");
+str_set(l2, BT_LINE, "Max HP ");
+str_add_num(l2, BT_LINE, new_max);
+str_add(l2, BT_LINE, ". Stats increased!");
+say(AFTER_LEVELUP, l1, l2);
+bt_redraw |= BT_HUD;
+}
+int battle_input(unsigned short pressed) {
+int a = (pressed & KEY_A) != 0;
+int b = (pressed & KEY_B) != 0;
+int step = 0;
+char l1[BT_LINE], l2[BT_LINE];
+if (pressed & (KEY_DOWN | KEY_RIGHT)) step = 1;
+if (pressed & (KEY_UP | KEY_LEFT)) step = -1;
+if (bt_state == BS_MENU) {
+int pos = bt_cursor;
+if ((pressed & KEY_RIGHT) && pos == MENU_FIGHT) pos = MENU_POKEMON_SWAP;
+if ((pressed & KEY_LEFT)  && pos == MENU_POKEMON_SWAP) pos = MENU_FIGHT;
+if ((pressed & KEY_DOWN)  && pos == MENU_FIGHT) pos = MENU_CATCH;
+if ((pressed & KEY_DOWN)  && pos == MENU_POKEMON_SWAP) pos = MENU_RUN;
+if ((pressed & KEY_UP)    && pos == MENU_CATCH) pos = MENU_FIGHT;
+if ((pressed & KEY_UP)    && pos == MENU_RUN) pos = MENU_POKEMON_SWAP;
+if ((pressed & KEY_RIGHT) && pos == MENU_CATCH) pos = MENU_RUN;
+if ((pressed & KEY_LEFT)  && pos == MENU_RUN) pos = MENU_CATCH;
+if (pos != bt_cursor) { bt_cursor = pos; bt_redraw |= BT_BOX; }
+if (a) {
+if (bt_cursor == MENU_FIGHT) {
+bt_state = BS_MOVES;
+bt_cursor = 0;
+bt_redraw |= BT_BOX;
+} else if (bt_cursor == MENU_POKEMON_SWAP) {
+game_state = GM_PARTY_MENU;
+party_menu_cursor = 0;
+return BATTLE_GOING;
+} else if (bt_cursor == MENU_CATCH) {
+throw_ball();
+} else {
+say(AFTER_END_RAN, "Got away safely!", "");
+}
+}
+} else if (bt_state == BS_MOVES) {
+int n = player_mon.num_moves;
+if (step != 0 && n > 0) { bt_cursor = (bt_cursor + step + n) % n; bt_redraw |= BT_BOX; }
+if (b) { bt_state = BS_MENU; bt_cursor = 0; bt_redraw |= BT_BOX; }
+else if (a) player_attack(bt_cursor);
+} else if (a) {
+switch (bt_after) {
+case AFTER_MENU:
+bt_state = BS_MENU;
+bt_cursor = 0;
+bt_redraw |= BT_BOX;
+break;
+case AFTER_SWITCH_TURN:
+enemy_attack();
+break;
+case AFTER_ENEMY:
+enemy_attack();
+break;
+case AFTER_WIN: {
+int gain = 5 + 2 * wild_mon.level;
+str_set(l1, BT_LINE, "Wild ");
+str_add(l1, BT_LINE, mon_name(&wild_mon));
+str_add(l1, BT_LINE, " fainted!");
+str_set(l2, BT_LINE, mon_name(&player_mon));
+if (player_mon.level >= MAX_LEVEL) {
+str_add(l2, BT_LINE, " is at max level!");
+} else {
+player_mon.exp = (unsigned short)(player_mon.exp + gain);
+str_add(l2, BT_LINE, " gained ");
+str_add_num(l2, BT_LINE, gain);
+str_add(l2, BT_LINE, " Exp. Points!");
+}
+say(AFTER_LEVELUP, l1, l2);
+bt_redraw |= BT_HUD;
+break;
+}
+case AFTER_LEVELUP:
+if (player_mon.level < MAX_LEVEL && player_mon.exp >= (unsigned short)exp_to_next(player_mon.level))
+level_up();
+else
+return BATTLE_WON;
+break;
+case AFTER_CATCH:
+catch_result();
+break;
+case AFTER_MUST_SWITCH:
+str_set(l1, BT_LINE, mon_name(&player_mon));
+str_add(l1, BT_LINE, " fainted!");
+say(AFTER_MENU, l1, "Choose another POKEMON!");
+game_state = GM_PARTY_MENU;
+party_menu_cursor = 0;
+break;
+case AFTER_LOSE:
+str_set(l1, BT_LINE, mon_name(&player_mon));
+str_add(l1, BT_LINE, " fainted!");
+say(AFTER_END_LOST, l1, "You rushed to the POKEMON CENTER!");
+break;
+case AFTER_END_WON:    return BATTLE_WON;
+case AFTER_END_RAN:    return BATTLE_RAN;
+case AFTER_END_CAUGHT: return BATTLE_CAUGHT;
+case AFTER_END_LOST:
+heal_party();
+return BATTLE_LOST;
+default:
+break;
+}
+}
+return BATTLE_GOING;
+}
