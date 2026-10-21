@@ -186,7 +186,7 @@ const Species species[NUM_SPECIES] = {
     "..K..K.." ".KBBBBK." "KBEBBEBK" "KBBBBBBK" ".KBBBBK." ".KAAAAK." "..KBBK.." "...KK...",
     6, MV_TACKLE },
   // Your PIKACHU (yellow body, red cheeks). hp_base and move are not used for
-  // it: its HP and moves live in player_mon below.
+  // it: its HP and moves live in party[0] below.
   { "Pikachu",  RGB15(31, 27, 6),  RGB15(30, 8, 6),
     "KK....KK" ".BK..KB." ".KBBBBK." "KBEBBEBK" "KAABBAAK" "KBBBBBBK" ".KBBBBK." "..KKKK..",
     0, MV_THUNDER_SHOCK }
@@ -299,8 +299,14 @@ int cur_room = R_TOWN;
 int walk_frame = 0;
 int walk_timer = 0;
 int wild_species = -1;   // species of the current wild encounter (SP_...), -1 = none
-// Your starter: PIKACHU, level 5, 20/20 HP, 0 EXP, two moves.
-Mon player_mon = { SP_PIKACHU, 5, 20, 20, 0, 2, { MV_THUNDER_SHOCK, MV_QUICK_ATTACK } };
+// Your party. Slot 0 is your starter PIKACHU: level 5, 20/20 HP, 0 EXP, two
+// moves. (HP follows 10 + 2 * level, see max_hp_for_level in world.c.)
+// The other slots are empty until you catch something.
+Mon party[PARTY_MAX] = {
+  { SP_PIKACHU, 5, 20, 20, 0, 2, { MV_THUNDER_SHOCK, MV_QUICK_ATTACK } }
+};
+int party_count = 1;
+int pokeballs = START_BALLS;
 Mon wild_mon;            // filled in by battle_begin() for every new fight
 int bt_state = BS_MESSAGE;
 int bt_cursor = 0;
