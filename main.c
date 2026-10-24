@@ -1,203 +1,383 @@
-// main.c - system loop, user input handling, and overarching game state transitions
+// render.c - drawing: the screen painter, VBlank wait, the dialogue box, the
+// battle screen and the debug lamps.
 #include "game.h"
-static void change_room(int room, int sx, int sy, int sdir, int* x, int* y, int* dir) {
-cur_room = room;
-rooms[cur_room].build();
-pick_start(sx, sy, x, y);
-*dir = sdir;
-walk_frame = 0;
-walk_timer = 0;
-steps_reset(*x, *y);
-show_map(*x, *y, *dir);
+
+// Paint a screen rectangle (right/bottom not included). Each pixel's final
+// color (map, then trainer on top) is worked out first and written ONCE,
+// so the trainer is never painted over and nothing is erased first.
+void paint_box(int left, int top, int right, int bottom,
+                      int px, int py, int dir) {
+  int sx, sy;
+  if (left < 0) left = 0;
+  if (top < 0) top = 0;
+  if (right > SCREEN_W) right = SCREEN_W;
+  if (bottom > SCREEN_H) bottom = SCREEN_H;
+
+  for (sy = top; sy < bottom; sy++) {
+    volatile unsigned short* row = VRAM + sy * SCREEN_W;
+    int in_rows = (sy >= py && sy < py + TILE);
+    for (sx = left; sx < right; sx++) {
+      unsigned short color =
+          tile_gfx[map_kind[cur_room][sy >> 4][sx >> 4]][((sy & 15) << 4) | (sx & 15)];
+      if (in_rows && sx >= px && sx < px + TILE) {
+        unsigned short c = sprite_gfx[dir][walk_frame][(sy - py) * TILE + (sx - px)];
+        if (c != CLEAR) color = c;
+      }
+      row[sx] = color;
+    }
+  }
 }
-int main(void) {
-int x, y;
-int dir = DIR_UP;
-int n, m;
-unsigned int frame = 0;
-unsigned short prev_keys = 0;
-REG_DISPCNT = 0x0080;
-for (m = 0; m < NUM_ROOMS; m++) build_map(m);
-build_sprites();
-cur_room = R_TOWN;
-rooms[cur_room].build();
-pick_start(START_TX, START_TY, &x, &y);
-steps_reset(x, y);
-show_map(x, y, dir);
-while (1) {
-unsigned short keys;
-int old_x = x, old_y = y, old_dir = dir;
-int old_walk_frame = walk_frame;
-int dx = 0, dy = 0;
-int moved, door, npc, a_press, start_press, b_press, warp, wild;
-unsigned short pressed;
-wait_vblank();
-frame++;
-keys = (unsigned short)(~REG_KEYINPUT) & 0x03FF;
-rng_stir(frame ^ ((unsigned int)keys << 16));
-pressed = (unsigned short)(keys & ~prev_keys);
-a_press = (pressed & KEY_A) != 0;
-b_press = (pressed & KEY_B) != 0;
-start_press = (pressed & KEY_START) != 0;
-// STATE: MAIN MENU
-if (game_state == GM_MAIN_MENU) {
-prev_keys = keys;
-if (pressed & KEY_UP) {
-main_menu_cursor = (main_menu_cursor + MM_COUNT - 1) % MM_COUNT;
-render_main_menu();
-} else if (pressed & KEY_DOWN) {
-main_menu_cursor = (main_menu_cursor + 1) % MM_COUNT;
-render_main_menu();
-} else if (b_press || (a_press && main_menu_cursor == MM_CLOSE)) {
-game_state = GM_WORLD;
-show_map(x, y, dir);
-} else if (a_press) {
-if (main_menu_cursor == MM_POKEMON) {
-game_state = GM_PARTY_MENU;
-party_menu_cursor = 0;
-render_party_screen(0);
-} else {
-game_state = GM_SUB_MENU;
-sub_menu_type = main_menu_cursor;
-render_sub_screen(sub_menu_type);
+
+void wait_vblank(void) {
+  while (REG_VCOUNT >= 160) {}
+  while (REG_VCOUNT < 160) {}
 }
+
+// Full-screen repaint (start, entering, leaving). Mode 3 has ONE framebuffer,
+// so a long repaint would be seen half-finished. Forced blank hides it.
+void show_map(int x, int y, int dir) {
+  wait_vblank();
+  REG_DISPCNT = 0x0080;
+  paint_box(0, 0, SCREEN_W, SCREEN_H, x, y, dir);
+  REG_DISPCNT = 0x0403;
 }
-continue;
+// ---------- Dialogue box ----------
+#define DLG_X      8        // the box: 224 x 40 pixels at the bottom
+#define DLG_Y      112
+#define DLG_W      224
+#define DLG_H      40
+#define DLG_COLS   34       // characters per line (6 pixels each = 204)
+#define DLG_LINES  2        // lines per page
+#define DLG_PAPER  RGB15(31, 31, 29)
+#define DLG_INK    RGB15(3, 3, 6)
+#define DLG_SHADOW RGB15(20, 20, 23)
+int dlg_open = 0;                    // 1 while the box is on screen
+static const char* dlg_text = 0;            // the whole text being shown (set when a box opens)
+static int dlg_pos = 0;                     // where the current page starts
+static int dlg_next = 0;                    // where the next page starts
+static char dlg_lines[DLG_LINES][DLG_COLS + 1];
+
+// Work out the current page: fill dlg_lines (word-wrapped) and find where
+// the next page starts. Never writes past DLG_COLS characters per line.
+static void dlg_layout(void) {
+  int p = dlg_pos, line, col, len, k;
+  for (line = 0; line < DLG_LINES; line++) dlg_lines[line][0] = '\0';
+  line = 0;
+  while (line < DLG_LINES) {
+    while (dlg_text[p] == ' ') p++;                  // no spaces at the start of a line
+    if (dlg_text[p] == '\0') break;                  // end of the text
+    if (dlg_text[p] == '|') {                        // forced new page
+      p++;
+      if (line > 0) break;
+      continue;
+    }
+    col = 0;
+    while (dlg_text[p] != '\0' && dlg_text[p] != '|') {
+      len = 0;
+      while (dlg_text[p + len] != ' ' && dlg_text[p + len] != '\0' &&
+             dlg_text[p + len] != '|') len++;
+      if (col > 0 && col + 1 + len > DLG_COLS) break;   // word does not fit: next line
+      if (col > 0) dlg_lines[line][col++] = ' ';
+      if (len > DLG_COLS - col) len = DLG_COLS - col;   // a giant word is cut
+      for (k = 0; k < len; k++) dlg_lines[line][col++] = dlg_text[p + k];
+      p += len;
+      while (dlg_text[p] == ' ') p++;
+      if (col >= DLG_COLS) break;
+    }
+    dlg_lines[line][col] = '\0';
+    line++;
+  }
+  dlg_next = p;
 }
-// STATE: SUB MENU
-if (game_state == GM_SUB_MENU) {
-prev_keys = keys;
-if (b_press || a_press) {
-game_state = GM_MAIN_MENU;
-show_map(x, y, dir);
-render_main_menu();
+
+// Is there another page after the current one?
+static int dlg_has_more(void) {
+  int p = dlg_next;
+  while (dlg_text[p] == ' ' || dlg_text[p] == '|') p++;
+  return dlg_text[p] != '\0';
 }
-continue;
+
+// Fill a rectangle of the screen (x1/y1 not included). Callers keep it on screen.
+static void fill_rect(int x0, int y0, int x1, int y1, unsigned short c) {
+  int x, y;
+  for (y = y0; y < y1; y++)
+    for (x = x0; x < x1; x++)
+      VRAM[y * SCREEN_W + x] = c;
 }
-// STATE: PARTY MENU
-if (game_state == GM_PARTY_MENU) {
-prev_keys = keys;
-if (pressed & KEY_UP) {
-party_menu_cursor = (party_menu_cursor + party_count - 1) % party_count;
-render_party_screen(battle_open);
-} else if (pressed & KEY_DOWN) {
-party_menu_cursor = (party_menu_cursor + 1) % party_count;
-render_party_screen(battle_open);
-} else if (b_press) {
-if (battle_open) {
-game_state = GM_BATTLE;
-bt_redraw = BT_HUD | BT_BOX;
-battle_redraw();
-} else {
-game_state = GM_MAIN_MENU;
-show_map(x, y, dir);
-render_main_menu();
+
+// Draw one letter's lit pixels.
+static void draw_glyph(int x, int y, char ch, unsigned short color) {
+  int col, row;
+  const unsigned char* g;
+  if (ch < ' ' || ch > 'z') ch = '?';
+  g = font5x8[ch - ' '];
+  for (col = 0; col < 5; col++)
+    for (row = 0; row < 8; row++)
+      if (g[col] & (1 << row))
+        VRAM[(y + row) * SCREEN_W + x + col] = color;
 }
-} else if (a_press) {
-if (battle_open) {
-if (switch_active_mon(party_menu_cursor)) {
-game_state = GM_BATTLE;
-bt_redraw = BT_HUD | BT_BOX;
-str_set(bt_line1, BT_LINE, "Go! ");
-str_add(bt_line1, BT_LINE, species[player_mon.species].name);
-str_add(bt_line1, BT_LINE, "!");
-str_set(bt_line2, BT_LINE, "");
-bt_state = BS_MESSAGE;
-bt_after = AFTER_SWITCH_TURN;
-battle_redraw();
+
+// A line of text with a soft shadow (shadow first, so it never covers letters).
+static void draw_line(int x, int y, const char* str) {
+  int i;
+  for (i = 0; str[i]; i++) draw_glyph(x + i * 6 + 1, y + 1, str[i], DLG_SHADOW);
+  for (i = 0; str[i]; i++) draw_glyph(x + i * 6,     y,     str[i], DLG_INK);
 }
-} else {
-// Field selection context
-render_party_screen(0);
+
+// Redraw the text area of the box for the current page.
+static void draw_dialog_text(void) {
+  int i, ax = DLG_X + DLG_W - 14, ay = DLG_Y + DLG_H - 10;
+  fill_rect(DLG_X + 4, DLG_Y + 4, DLG_X + DLG_W - 4, DLG_Y + DLG_H - 4, DLG_PAPER);
+  for (i = 0; i < DLG_LINES; i++)
+    draw_line(DLG_X + 10, DLG_Y + 8 + i * 13, dlg_lines[i]);
+  if (dlg_has_more()) {                              // little "more" arrow
+    fill_rect(ax,     ay,     ax + 7, ay + 1, DLG_INK);
+    fill_rect(ax + 1, ay + 1, ax + 6, ay + 2, DLG_INK);
+    fill_rect(ax + 2, ay + 2, ax + 5, ay + 3, DLG_INK);
+    fill_rect(ax + 3, ay + 3, ax + 4, ay + 4, DLG_INK);
+  }
 }
+
+// Draw the box with the first page of a text (used by people and encounters).
+static void dlg_show(const char* text) {
+  dlg_text = text;
+  dlg_pos = 0;
+  dlg_layout();
+  fill_rect(DLG_X, DLG_Y, DLG_X + DLG_W, DLG_Y + DLG_H, OUTLINE);
+  fill_rect(DLG_X + 1, DLG_Y + 1, DLG_X + DLG_W - 1, DLG_Y + DLG_H - 1,
+            RGB15(12, 16, 26));
+  draw_dialog_text();
 }
-continue;
+
+// Start talking to person number n.
+void dialog_open(int n) {
+  dlg_show(npcs[n].text);
+  dlg_open = 1;
 }
-// STATE: BATTLE
-if (battle_open) {
-int result;
-prev_keys = keys;
-result = battle_input(pressed);
-if (result == BATTLE_GOING) {
-if (bt_redraw) battle_redraw();
-} else {
-battle_close();
-if (result == BATTLE_LOST)
-change_room(BLACKOUT_ROOM, BLACKOUT_TX, BLACKOUT_TY, DIR_UP, &x, &y, &dir);
-else
-show_map(x, y, dir);
+
+// A pressed while talking: next page, or close the box and repaint what was
+// under it (the map, with the trainer on top).
+void dialog_advance(int x, int y, int dir) {
+  if (dlg_has_more()) {
+    dlg_pos = dlg_next;
+    dlg_layout();
+    draw_dialog_text();
+  } else {
+    dlg_open = 0;
+    walk_frame = 0;
+    walk_timer = 0;
+    paint_box(DLG_X, DLG_Y, DLG_X + DLG_W, DLG_Y + DLG_H, x, y, dir);
+  }
 }
-continue;
+
+// ---------- Battle screen ----------
+// Layout (240x160): the wild POKEMON's panel top-left and its picture top-right;
+// your PIKACHU's picture bottom-left and its panel bottom-right; the message /
+// menu box at the very bottom (same place as the dialogue box).
+// The whole scene is drawn once under forced blank (like show_map). After that
+// only the parts that changed are drawn again (battle_redraw), so it is quick.
+// world.c changes the numbers and text; this file only draws them.
+int battle_open = 0;                   // 1 while the battle screen is showing
+
+#define PANEL_BORDER RGB15(12, 16, 26)
+#define PANEL_W      120
+
+// The 8x8 placeholder picture of species sp at 4x size (32x32 pixels).
+static void draw_species(int sp, int x0, int y0) {
+  const Species* s = &species[sp];
+  int cx, cy;
+  for (cy = 0; cy < 8; cy++) {
+    for (cx = 0; cx < 8; cx++) {
+      char c = s->art[cy * 8 + cx];
+      int x = x0 + cx * 4, y = y0 + cy * 4;
+      if (c == 'B')      fill_rect(x, y, x + 4, y + 4, s->body);
+      else if (c == 'A') fill_rect(x, y, x + 4, y + 4, s->accent);
+      else if (c == 'K') fill_rect(x, y, x + 4, y + 4, OUTLINE);
+      else if (c == 'Y') fill_rect(x, y, x + 4, y + 4, RGB15(31, 22, 5));
+      else if (c == 'E') {
+        fill_rect(x, y, x + 4, y + 4, WHITE);
+        fill_rect(x + 1, y + 1, x + 3, y + 3, OUTLINE);
+      }
+    }
+  }
 }
-// STATE: DIALOGUE
-if (dlg_open) {
-prev_keys = keys;
-if (a_press) dialog_advance(x, y, dir);
-continue;
+
+// Sky, grass, two platforms and the two POKEMON pictures.
+static void draw_battle_scene(void) {
+  fill_rect(0, 0, SCREEN_W, 28, RGB15(17, 25, 31));              // sky
+  fill_rect(0, 28, SCREEN_W, 64, RGB15(22, 29, 31));
+  fill_rect(0, 64, SCREEN_W, SCREEN_H, RGB15(11, 24, 8));        // grass
+  fill_rect(0, 82, SCREEN_W, 84, RGB15(13, 27, 10));
+  fill_rect(0, 98, SCREEN_W, 100, RGB15(13, 27, 10));
+  fill_rect(140, 66, 212, 68, RGB15(14, 29, 11));                // their platform
+  fill_rect(134, 68, 218, 72, RGB15(9, 20, 7));
+  fill_rect(142, 72, 210, 74, RGB15(6, 14, 5));
+  fill_rect(20, 102, 92, 105, RGB15(14, 29, 11));                // our platform
+  fill_rect(12, 105, 100, 109, RGB15(9, 20, 7));
+  fill_rect(22, 109, 90, 111, RGB15(6, 14, 5));
+  draw_species(wild_mon.species, 160, 32);
+  draw_species(player_mon.species, 36, 70);
 }
-// Open Main Menu in overworld with START
-if (start_press) {
-prev_keys = keys;
-game_state = GM_MAIN_MENU;
-main_menu_cursor = 0;
-render_main_menu();
-continue;
+
+// A framed white panel.
+static void draw_panel(int x, int y, int w, int h) {
+  fill_rect(x, y, x + w, y + h, OUTLINE);
+  fill_rect(x + 1, y + 1, x + w - 1, y + h - 1, PANEL_BORDER);
+  fill_rect(x + 3, y + 3, x + w - 3, y + h - 3, DLG_PAPER);
 }
-// Overworld Interaction
-door = a_press ? front_door(x, y, dir) : -1;
-npc  = (a_press && door < 0) ? front_npc(x, y, dir) : -1;
-if (npc >= 0) {
-prev_keys = keys;
-walk_frame = 0;
-walk_timer = 0;
-paint_box(x, y, x + TILE, y + TILE, x, y, dir);
-if (npcs[npc].heals) heal_party();
-dialog_open(npc);
-continue;
+
+// HP bar w pixels wide: green above half, yellow above a fifth, then red.
+static void draw_hp_bar(int x, int y, int w, int hp, int max_hp) {
+  int fill = (max_hp > 0) ? hp * w / max_hp : 0;
+  unsigned short col;
+  if (hp > 0 && fill < 1) fill = 1;          // a sliver while still alive
+  if (fill > w) fill = w;
+  if (hp * 100 >= max_hp * 50)      col = RGB15(6, 26, 8);
+  else if (hp * 100 >= max_hp * 20) col = RGB15(30, 25, 3);
+  else                              col = RGB15(30, 6, 4);
+  fill_rect(x - 1, y - 1, x + w + 1, y + 6, OUTLINE);
+  fill_rect(x, y, x + w, y + 5, RGB15(9, 9, 11));
+  if (fill > 0) fill_rect(x, y, x + fill, y + 5, col);
 }
-if (door >= 0) {
-change_room(doors[door].to, doors[door].sx, doors[door].sy,
-doors[door].sdir, &x, &y, &dir);
-prev_keys = keys;
-continue;
+
+// Name, level, HP bar and HP numbers (your POKEMON also shows its EXP).
+static void draw_mon_panel(const Mon* m, int x, int y, int is_player) {
+  char buf[16];
+  draw_panel(x, y, PANEL_W, is_player ? 37 : 27);
+  draw_line(x + 6, y + 4, species[m->species].name);
+  str_set(buf, (int)sizeof(buf), "Lv");
+  str_add_num(buf, (int)sizeof(buf), m->level);
+  draw_line(x + 88, y + 4, buf);
+  draw_line(x + 6, y + 14, "HP");
+  draw_hp_bar(x + 24, y + 16, 54, m->hp, m->max_hp);
+  str_set(buf, (int)sizeof(buf), "");
+  str_add_num(buf, (int)sizeof(buf), m->hp);
+  str_add(buf, (int)sizeof(buf), "/");
+  str_add_num(buf, (int)sizeof(buf), m->max_hp);
+  draw_line(x + 84, y + 14, buf);
+  if (is_player) {
+    str_set(buf, (int)sizeof(buf), "EXP ");
+    if (m->level >= MAX_LEVEL) {
+      str_add(buf, (int)sizeof(buf), "MAX");
+    } else {                                   // progress toward the next level
+      str_add_num(buf, (int)sizeof(buf), m->exp);
+      str_add(buf, (int)sizeof(buf), "/");
+      str_add_num(buf, (int)sizeof(buf), exp_to_next(m->level));
+    }
+    draw_line(x + 6, y + 25, buf);
+  }
 }
-prev_keys = keys;
-if (keys & KEY_LEFT)  { dx = -1; dir = DIR_LEFT;  }
-if (keys & KEY_RIGHT) { dx =  1; dir = DIR_RIGHT; }
-if (keys & KEY_UP)    { dy = -1; dir = DIR_UP;    }
-if (keys & KEY_DOWN)  { dy =  1; dir = DIR_DOWN;  }
-for (n = 0; n < SPEED; n++) {
-if (dx != 0 && can_stand(x + dx, y)) x += dx;
-if (dy != 0 && can_stand(x, y + dy)) y += dy;
+
+// Little arrow pointing at the chosen menu line (4 wide, 7 tall).
+static void draw_cursor(int x, int y) {
+  int i;
+  for (i = 0; i < 7; i++)
+    fill_rect(x, y + i, x + ((i < 4) ? i + 1 : 7 - i), y + i + 1, DLG_INK);
 }
-moved = (x != old_x || y != old_y);
-warp = moved ? warp_at_feet(x, y) : -1;
-if (warp >= 0) {
-change_room(warps[warp].to, warps[warp].sx, warps[warp].sy,
-warps[warp].sdir, &x, &y, &dir);
-continue;
+
+// "Press A" arrow in the corner of the box (same shape as the dialogue one).
+static void draw_more_arrow(void) {
+  int ax = DLG_X + DLG_W - 14, ay = DLG_Y + DLG_H - 10;
+  fill_rect(ax,     ay,     ax + 7, ay + 1, DLG_INK);
+  fill_rect(ax + 1, ay + 1, ax + 6, ay + 2, DLG_INK);
+  fill_rect(ax + 2, ay + 2, ax + 5, ay + 3, DLG_INK);
+  fill_rect(ax + 3, ay + 3, ax + 4, ay + 4, DLG_INK);
 }
-if (moved) {
-walk_timer++;
-if (walk_timer >= 6) { walk_timer = 0; walk_frame = 1 - walk_frame; }
-} else {
-walk_timer = 0;
-walk_frame = 0;
+
+// A small framed area inside the box (for the menu lists).
+static void draw_subbox(int x0) {
+  fill_rect(DLG_X + x0, DLG_Y + 5, DLG_X + DLG_W - 5, DLG_Y + DLG_H - 5, OUTLINE);
+  fill_rect(DLG_X + x0 + 1, DLG_Y + 6, DLG_X + DLG_W - 6, DLG_Y + DLG_H - 6, DLG_PAPER);
 }
-if (moved || dir != old_dir || walk_frame != old_walk_frame) {
-int left   = (x < old_x) ? x : old_x;
-int top    = (y < old_y) ? y : old_y;
-int right  = ((x > old_x) ? x : old_x) + TILE;
-int bottom = ((y > old_y) ? y : old_y) + TILE;
-paint_box(left, top, right, bottom, x, y, dir);
+
+// The box at the bottom: a message, the FIGHT/RUN menu, or the move list.
+static void draw_battle_box(void) {
+  char buf[BT_LINE];
+  int i;
+  fill_rect(DLG_X, DLG_Y, DLG_X + DLG_W, DLG_Y + DLG_H, OUTLINE);
+  fill_rect(DLG_X + 1, DLG_Y + 1, DLG_X + DLG_W - 1, DLG_Y + DLG_H - 1, PANEL_BORDER);
+  fill_rect(DLG_X + 4, DLG_Y + 4, DLG_X + DLG_W - 4, DLG_Y + DLG_H - 4, DLG_PAPER);
+  if (bt_state == BS_MESSAGE) {
+    draw_line(DLG_X + 10, DLG_Y + 8, bt_line1);
+    draw_line(DLG_X + 10, DLG_Y + 21, bt_line2);
+    draw_more_arrow();
+  } else if (bt_state == BS_MENU) {
+    draw_line(DLG_X + 10, DLG_Y + 8, "What will");
+    str_set(buf, BT_LINE, species[player_mon.species].name);
+    str_add(buf, BT_LINE, " do?");
+    draw_line(DLG_X + 10, DLG_Y + 21, buf);
+    draw_subbox(104);
+    // Two columns:  FIGHT  CATCH   (bt_cursor 0, 1)
+    //               RUN    Ball:5  (bt_cursor 2; the ball count is not a choice)
+    draw_line(DLG_X + 123, DLG_Y + 8, "FIGHT");
+    draw_line(DLG_X + 167, DLG_Y + 8, "CATCH");
+    draw_line(DLG_X + 123, DLG_Y + 21, "RUN");
+    str_set(buf, BT_LINE, "Ball:");
+    str_add_num(buf, BT_LINE, pokeballs);
+    draw_line(DLG_X + 167, DLG_Y + 21, buf);
+    draw_cursor(DLG_X + 113 + (bt_cursor & 1) * 44, DLG_Y + 9 + (bt_cursor >> 1) * 13);
+  } else {                                           // BS_MOVES
+    for (i = 0; i < player_mon.num_moves; i++)
+      draw_line(DLG_X + 26, DLG_Y + 8 + i * 13, moves[player_mon.move[i]].name);
+    draw_cursor(DLG_X + 14, DLG_Y + 9 + bt_cursor * 13);
+    draw_subbox(140);
+    draw_line(DLG_X + 148, DLG_Y + 8, "B: Back");
+    str_set(buf, BT_LINE, "Power ");
+    str_add_num(buf, BT_LINE, moves[player_mon.move[bt_cursor]].power);
+    draw_line(DLG_X + 148, DLG_Y + 21, buf);
+  }
 }
-wild = moved ? step_encounter(x, y) : -1;
-if (wild >= 0) {
-walk_frame = 0;
-walk_timer = 0;
-battle_begin(wild);
-battle_screen_open();
-continue;
+
+// Draw again whatever world.c marked as out of date in bt_redraw.
+void battle_redraw(void) {
+  if (bt_redraw & BT_HUD) {
+    draw_mon_panel(&wild_mon, 8, 8, 0);
+    draw_mon_panel(&player_mon, 112, 74, 1);
+  }
+  if (bt_redraw & BT_BOX) draw_battle_box();
+  bt_redraw = 0;
 }
+
+// Show the whole battle screen (call right after battle_begin()).
+void battle_screen_open(void) {
+  wait_vblank();
+  REG_DISPCNT = 0x0080;
+  draw_battle_scene();
+  bt_redraw = BT_HUD | BT_BOX;
+  battle_redraw();
+  REG_DISPCNT = 0x0403;
+  battle_open = 1;
 }
+
+// The battle is over: main repaints the map (or moves you to the CENTER).
+void battle_close(void) {
+  battle_open = 0;
+  walk_frame = 0;
+  walk_timer = 0;
 }
+
+#if DEBUG_HUD
+// Lamps live in the top row (always solid), where the trainer can't walk.
+void lamp(int slot, int on, unsigned short color) {
+  int lx = 2 + slot * 8;
+  int x, y;
+  for (y = 2; y < 8; y++)
+    for (x = lx; x < lx + 6; x++)
+      VRAM[y * SCREEN_W + x] = on ? color : RGB15(4, 4, 4);
+}
+
+// 0 blinks = loop runs; 1-4 = LEFT/RIGHT/UP/DOWN; 5 = moved; 6 = blocked;
+// 7 (orange) = a dialogue box or the battle screen is open
+void show_lamps(unsigned int frame, unsigned short keys,
+                       int moved, int blocked) {
+  lamp(0, (frame >> 5) & 1, RGB15(31, 0, 31));
+  lamp(1, keys & KEY_LEFT,  RGB15(0, 31, 31));
+  lamp(2, keys & KEY_RIGHT, RGB15(0, 31, 31));
+  lamp(3, keys & KEY_UP,    RGB15(0, 31, 31));
+  lamp(4, keys & KEY_DOWN,  RGB15(0, 31, 31));
+  lamp(5, moved,            RGB15(31, 31, 31));
+  lamp(6, blocked,          RGB15(31, 0, 0));
+  lamp(7, dlg_open || battle_open, RGB15(31, 20, 0));
+}
+#endif
+// END OF render.c
