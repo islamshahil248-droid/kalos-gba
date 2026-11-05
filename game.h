@@ -1,6 +1,4 @@
-// GBA town with 4 enterable buildings, NPCs, dialogue, Route 1 and
-// wild POKEMON encounters, turn-based battles, leveling and catching,
-// a party screen with battle switching, and a START main menu.
+// GBA town with 4 enterable buildings, NPCs and dialogue.
 // Mode 3, 240x160, devkitARM, no libraries.
 //
 // game.h - shared by every .c file: constants, types, and the list of what
@@ -14,14 +12,11 @@
 #define REG_KEYINPUT (*(volatile unsigned short*)0x04000130)
 #define VRAM ((volatile unsigned short*)0x06000000)
 #define RGB15(r, g, b) ((r) | ((g) << 5) | ((b) << 10))
-#define KEY_A      0x0001
-#define KEY_B      0x0002
-#define KEY_SELECT 0x0004
-#define KEY_START  0x0008   // opens the main menu
-#define KEY_RIGHT  0x0010
-#define KEY_LEFT   0x0020
-#define KEY_UP     0x0040
-#define KEY_DOWN   0x0080
+#define KEY_A     0x0001
+#define KEY_RIGHT 0x0010
+#define KEY_LEFT  0x0020
+#define KEY_UP    0x0040
+#define KEY_DOWN  0x0080
 
 #define DEBUG_HUD 1   // 1 = show test lamps top-left, 0 = hide
 
@@ -30,8 +25,7 @@
 #define TILE     16
 #define MAP_W    15
 #define MAP_H    10
-#define SPEED    2      // pixels per frame at the normal walking speed
-#define SPEED_FAST 3    // pixels per frame when Options > WALK SPEED is FAST
+#define SPEED    2
 #define START_TX 6    // where the trainer starts in town
 #define START_TY 8
 #define HB_LEFT   2   // trainer body box inside the 16x16 sprite
@@ -49,7 +43,7 @@
 
 // Rooms. Each room has its OWN tile numbers (0 = first tile of that room)
 // and only the current room's pictures are kept in memory.
-enum { R_TOWN, R_CENTER, R_MART, R_HOUSE1, R_HOUSE2, R_ROUTE1, NUM_ROOMS };
+enum { R_TOWN, R_CENTER, R_MART, R_HOUSE1, R_HOUSE2, NUM_ROOMS };
 
 // Town tiles (3 and up are SOLID). MAX_TILES = biggest tile set of any room.
 enum {
@@ -70,71 +64,6 @@ enum { H1_FA, H1_FB, H1_RUG, H1_WALL, H1_WIN, H1_DOOR, H1_BED_H, H1_BED_F,
 enum { H2_FA, H2_FB, H2_RUG, H2_WALL, H2_WIN, H2_DOOR, H2_SHELF_A, H2_SHELF_B,
        H2_BED_H, H2_BED_F, H2_TABLE, H2_CHAIR, H2_PLANT, H2_NPC };
 #define SOLID_INSIDE 3
-// Route 1 tiles. 0-2 are the SAME pictures as the town's grass, path and
-// flowers (build_route1 calls build_town first). 3 = tall grass: you can walk
-// on it and wild POKEMON can appear there. 4 and up are SOLID.
-enum { RT_GRASS, RT_PATH, RT_FLOWER, RT_TALL, RT_TREE, RT_SIGN };
-
-#define NO_TILE 255           // "this room has no such tile"
-
-// Wild POKEMON. Species numbers (index into species[] in data.c).
-// SP_PIKACHU is the player's own POKEMON; it is not in any wild encounter table.
-enum { SP_PIDGEY, SP_RATTATA, SP_CATERPIE, SP_PIKACHU, NUM_SPECIES };
-
-// After an encounter, this many tall-grass steps are safe (no new encounter).
-// The chance per step lives in zones[] in data.c.
-#define ENC_COOLDOWN_STEPS 3
-
-// ---- Battles ----
-enum { MV_THUNDER_SHOCK, MV_QUICK_ATTACK, MV_TACKLE, MV_GUST, MV_BUG_BITE,
-       NUM_MOVES };
-#define MAX_MOVES 4         // moves one POKEMON can know
-#define PARTY_MAX   6       // POKEMON you can carry at once
-#define MAX_LEVEL   40      // POKEMON stop growing here (keeps HP at 2 digits)
-#define START_BALLS 5       // Poke Balls you begin the game with
-// The four lines of the battle menu (this is what bt_cursor means in BS_MENU).
-// They sit in a 2x2 grid:   FIGHT (0)  CATCH (1)
-//                           RUN (2)    POKEMON (3)
-enum { MENU_FIGHT, MENU_CATCH, MENU_RUN, MENU_POKEMON };
-#define BT_LINE   36        // one battle message line (34 letters + the end mark)
-// What the bottom box of the battle screen is doing:
-enum { BS_MESSAGE, BS_MENU, BS_MOVES,   // text / main menu / move list
-       BS_PARTY };                      // the party screen (choose who fights)
-// What happens after the player closes a message with A:
-enum { AFTER_MENU, AFTER_ENEMY, AFTER_WIN, AFTER_LOSE,
-       AFTER_END_WON, AFTER_END_RAN, AFTER_END_LOST,
-       AFTER_LEVELUP,         // check for a level-up (or end the battle)
-       AFTER_CATCH,           // the ball was thrown: did it work?
-       AFTER_END_CAUGHT,
-       AFTER_CHOOSE };        // your POKEMON fainted: open the party screen
-// What battle_input() reports back to main:
-enum { BATTLE_GOING, BATTLE_WON, BATTLE_RAN, BATTLE_LOST, BATTLE_CAUGHT };
-// Bits of bt_redraw: which part of the battle screen must be drawn again.
-#define BT_HUD   1          // the two info panels (names, HP bars, numbers)
-#define BT_BOX   2          // the message / menu box at the bottom
-#define BT_PARTY 4          // the WHOLE party screen (it replaces the battle)
-#define BT_LIST  8          // only the party list + footer (cursor moved)
-#define BT_SCENE 16         // the WHOLE battle screen again (after the party
-                            // screen, or after a new POKEMON was sent out)
-// Where you wake up after fainting: the landing tile of the CENTER door
-// (the entry for R_CENTER in doors[], data.c).
-#define BLACKOUT_ROOM R_CENTER
-#define BLACKOUT_TX   7
-#define BLACKOUT_TY   8
-
-// ---- Main menu (START) and its screens ----
-// Which screen is showing. UI_NONE = no menu, you are playing normally.
-enum { UI_NONE, UI_MENU, UI_DEX, UI_PARTY, UI_SUMMARY, UI_BAG, UI_TRAINER,
-       UI_SAVE, UI_OPTIONS };
-// The lines of the main menu (order = menu_labels[] in data.c).
-enum { ME_DEX, ME_PARTY, ME_BAG, ME_TRAINER, ME_SAVE, ME_OPTIONS, ME_CLOSE,
-       NUM_MENU_ENTRIES };
-// The lines of the Options screen.
-enum { OPT_SPEED, OPT_ENCOUNTERS, OPT_BACK, NUM_OPT_LINES };
-// Bits of ui_redraw: what render.c must draw again for the menu screens.
-#define UIR_FULL 1          // the whole screen
-#define UIR_BODY 2          // only the list part (the cursor moved)
-#define TRAINER_NAME "RED"  // shown on the Trainer screen
 
 typedef struct {
   const char (*rows)[MAP_W + 1];     // the map letters
@@ -142,7 +71,6 @@ typedef struct {
   const unsigned char* kinds;        // ... and the tile each one means
   unsigned char solid_from;          // tile numbers >= this block you
   unsigned char checker;             // 1: '.' alternates tile 0 / tile 1
-  unsigned char tall;                // tile number of tall grass (NO_TILE = none)
   void (*build)(void);               // paints this room's tile pictures
 } Room;
 
@@ -156,65 +84,19 @@ typedef struct {                     // one person you can talk to
   unsigned char reach;               // 1 = must be right in front of you,
                                      // 3 = may stand behind a counter
   const char* text;                  // what they say (see "People" below)
-  unsigned char heals;               // 1 = talking to them heals your POKEMON
 } Npc;
 
-typedef struct {                     // one kind of POKEMON
-  const char* name;
-  unsigned short body, accent;       // colors of the 'B' and 'A' pixels below
-  const char* art;                   // placeholder picture: 8x8 = 64 letters
-  unsigned char hp_base;             // max HP = hp_base + 2 * level (every POKEMON)
-  unsigned char move;                // first move (MV_...); wild ones attack with it
-  unsigned char move2;               // second move: you get it when you catch one
-} Species;
-
-typedef struct {                     // one attack
-  const char* name;
-  unsigned char power;               // bigger = more damage
-} Move;
-
-typedef struct {                     // one POKEMON in a battle (yours or wild)
-  unsigned char species;             // SP_... (name and picture come from there)
-  unsigned char level;
-  int hp, max_hp;
-  unsigned short exp;                // experience points collected
-  unsigned char num_moves;           // how many entries of move[] are used
-  unsigned char move[MAX_MOVES];     // MV_...
-} Mon;
-
-typedef struct {                     // one line of an encounter table
-  unsigned char species;             // SP_...
-  unsigned char weight;              // bigger = more common
-} WildEntry;
-
-typedef struct {                     // the wild POKEMON of one room
-  unsigned char room;
-  unsigned char percent;             // chance (0-100) per NEW tall-grass tile
-  unsigned char count;               // how many entries
-  const WildEntry* entries;
-} Zone;
-
 // Counts come from data.c (so adding a door or person needs no edit here).
-// "Warps" are exits you trigger by WALKING onto the tile (same type as Door).
 #define NUM_DOORS num_doors
 #define NUM_NPCS  num_npcs
-#define NUM_WARPS num_warps
-#define NUM_ZONES num_zones
 
 // ===== Shared between files =====
 // data.c: tables (rooms, doors, people)
 extern const int num_doors;
 extern const int num_npcs;
-extern const int num_warps;
-extern const int num_zones;
 extern const Door doors[];
-extern const Door warps[];
-extern const Species species[NUM_SPECIES];
-extern const Zone zones[];
 extern const Npc npcs[];
-extern const Move moves[NUM_MOVES];
 extern const Room rooms[NUM_ROOMS];
-extern const char* const menu_labels[NUM_MENU_ENTRIES];   // the START menu lines
 
 // data.c: pixel art and font
 extern const char art_down[16][17];
@@ -232,36 +114,6 @@ extern unsigned char map_kind[NUM_ROOMS][MAP_H][MAP_W];
 extern int cur_room;
 extern int walk_frame;
 extern int walk_timer;
-extern int wild_species;   // species of the current wild encounter (SP_...), -1 = none
-// Your POKEMON. party[0] is PIKACHU. party_count is how many slots are used
-// (1 to PARTY_MAX). Caught POKEMON are added at the end. The order of the
-// array NEVER changes: "who is fighting" is just a number, active_idx.
-extern Mon party[PARTY_MAX];
-extern int party_count;
-extern int active_idx;     // slot of the POKEMON that fights (always < party_count)
-#define player_mon (party[active_idx])   // "the POKEMON that fights"
-extern int pokeballs;      // Poke Balls left
-extern unsigned char dex_seen[NUM_SPECIES];     // 1 = you have met this species
-extern unsigned char dex_caught[NUM_SPECIES];   // 1 = you own / have owned one
-extern unsigned int play_frames;   // frames played so far (60 = about 1 second)
-extern int opt_fast;       // Options: 1 = walk faster
-extern int opt_encounters; // Options: 1 = wild POKEMON can appear (0 = never)
-extern Mon wild_mon;       // the wild POKEMON you are fighting right now
-extern int bt_state;       // BS_...: what the bottom box is doing
-extern int bt_cursor;      // which menu line is chosen (0 = first)
-extern int bt_after;       // AFTER_...: what happens when A closes the message
-extern int bt_redraw;      // BT_... bits: what render.c must redraw
-extern char bt_line1[BT_LINE];   // the two lines of the current battle message
-extern char bt_line2[BT_LINE];
-// The party screen (used inside battles AND from the main menu):
-extern int pt_cursor;      // which party slot is chosen
-extern int pt_forced;      // 1 = you MUST pick (your POKEMON fainted), B is off
-extern char pt_note[BT_LINE];   // one line of help/complaint at the bottom
-// The main menu:
-extern int ui_screen;      // UI_...: which menu screen is showing (UI_NONE = none)
-extern int ui_menu_cursor; // chosen line of the main menu (remembered)
-extern int ui_cursor;      // chosen line of the Pokedex / Options screens
-extern int ui_redraw;      // UIR_... bits: what render.c must redraw
 
 // tiles.c: paint the pictures
 void build_town(void);
@@ -269,7 +121,6 @@ void build_center(void);
 void build_mart(void);
 void build_house1(void);
 void build_house2(void);
-void build_route1(void);
 void build_sprites(void);
 
 // world.c: map, collision, doors, people
@@ -278,22 +129,6 @@ int can_stand(int px, int py);
 int front_door(int x, int y, int dir);
 int front_npc(int x, int y, int dir);
 void pick_start(int stx, int sty, int* out_x, int* out_y);
-int warp_at_feet(int x, int y);        // warp the trainer is standing on, or -1
-void steps_reset(int x, int y);        // call when arriving in a room
-int step_encounter(int x, int y);      // new tall-grass step: species or -1
-void heal_party(void);                 // every POKEMON in the party back to full HP
-int exp_to_next(int level);            // EXP needed to go from `level` to the next
-int party_add(const Mon* m);           // add a POKEMON to the party: slot or -1 if full
-void rng_stir(unsigned int v);         // mix in a number (call every frame)
-void battle_begin(int sp);             // set up a fight against wild species sp
-int battle_input(unsigned short pressed);   // buttons pressed this frame ->
-                                       // BATTLE_GOING / WON / RAN / LOST
-void ui_open_menu(void);               // START was pressed: open the main menu
-int ui_input(unsigned short pressed);  // buttons pressed this frame while a menu
-                                       // is open -> 1 when the menu has closed
-void str_set(char* dst, int size, const char* s);   // tiny text helpers
-void str_add(char* dst, int size, const char* s);   // (no libraries needed)
-void str_add_num(char* dst, int size, int n);
 
 // render.c: drawing and dialogue
 void paint_box(int left, int top, int right, int bottom, int px, int py, int dir);
@@ -301,14 +136,8 @@ void wait_vblank(void);
 void show_map(int x, int y, int dir);
 void dialog_open(int n);
 void dialog_advance(int x, int y, int dir);
-void battle_screen_open(void);          // draw the whole battle screen
-void battle_redraw(void);              // draw again what bt_redraw asks for
-void battle_close(void);               // the battle screen is no longer up
-void ui_draw(int x, int y, int dir);   // draw the menu screen (x, y, dir = where
-                                       // the trainer stands, for the map behind)
 
 extern int dlg_open;   // render.c: 1 while a dialogue box is on screen
-extern int battle_open;   // render.c: 1 while the battle screen is showing
 
 #if DEBUG_HUD
 void lamp(int slot, int on, unsigned short color);
