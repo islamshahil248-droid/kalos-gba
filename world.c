@@ -1,5 +1,6 @@
 // world.c - the rules: turning maps into tiles, collision, doors, finding
-// the person in front of you, wild encounters, the battle rules, leveling and catching.
+// the person in front of you, wild encounters, the battle rules, leveling,
+// catching, switching POKEMON, and the logic of the START menu.
 #include "game.h"
 
 // Turn map letters into tile numbers (unknown letters: tile 0).
@@ -193,10 +194,13 @@ int step_encounter(int x, int y) {
 // ---------- Battles ----------
 // The battle is a tiny state machine. bt_state says what the bottom box shows:
 //   BS_MESSAGE  two lines of text; A closes them and then bt_after happens
-//   BS_MENU     FIGHT / CATCH / RUN
+//   BS_MENU     FIGHT / CATCH / RUN / POKEMON
 //   BS_MOVES    the list of your moves
+//   BS_PARTY    the party screen (choose who to send out)
 // Every turn goes: you attack -> (if it survives) it attacks -> back to menu.
 // A Poke Ball throw also uses up your turn: if it fails, the wild one attacks.
+// So does switching POKEMON on purpose. (Being sent out after your POKEMON
+// fainted is free: that is not a turn.)
 // This file only changes numbers and text; render.c draws them (bt_redraw
 // tells it what is out of date).
 
@@ -243,18 +247,32 @@ int exp_to_next(int level) {
   return 20 + 4 * level;
 }
 
-// Maximum HP of PIKACHU at a level: 10 + 2 per level (level 5 = 20 HP).
-static int max_hp_for_level(int level) {
-  return 10 + 2 * level;
+// Maximum HP of a POKEMON: its species' hp_base + 2 per level.
+// (PIKACHU: 10 + 2 * 5 = 20 HP at level 5.) A caught POKEMON uses the same
+// formula as when it was wild, so its HP never jumps when it levels up.
+static int max_hp_for(int sp, int level) {
+  return species[sp].hp_base + 2 * level;
+}
+
+// Give a POKEMON the two moves of its species.
+static void give_species_moves(Mon* m) {
+  int i;
+  m->num_moves = 2;
+  m->move[0] = species[m->species].move;
+  m->move[1] = species[m->species].move2;
+  for (i = 2; i < MAX_MOVES; i++) m->move[i] = 0;
 }
 
 // ---------- The party ----------
 // Copy a POKEMON into the next free party slot. Returns the slot number, or
 // -1 if the party is already full (PARTY_MAX). It keeps species, level, HP...
+// and makes sure the newcomer is fit to fight: it has moves, and 1 or more
+// HP (never more than its max). It also fills in the Pokedex.
 int party_add(const Mon* m) {
   Mon* d;
   int i;
   if (party_count >= PARTY_MAX) return -1;
+  if (m->species >= NUM_SPECIES) return -1;
   d = &party[party_count];
   d->species = m->species;
   d->level = m->level;
@@ -263,7 +281,26 @@ int party_add(const Mon* m) {
   d->exp = m->exp;
   d->num_moves = m->num_moves;
   for (i = 0; i < MAX_MOVES; i++) d->move[i] = m->move[i];
+  if (d->num_moves < 1 || d->num_moves > MAX_MOVES) give_species_moves(d);
+  if (d->max_hp < 1) d->max_hp = max_hp_for(d->species, d->level);
+  if (d->hp > d->max_hp) d->hp = d->max_hp;
+  if (d->hp < 1) d->hp = 1;
+  dex_seen[d->species] = 1;
+  dex_caught[d->species] = 1;
   return party_count++;
+}
+
+// Is party slot i a real POKEMON that can still fight?
+static int can_fight(int i) {
+  return i >= 0 && i < party_count && party[i].hp > 0;
+}
+
+// First party slot that can fight, or -1 if every POKEMON has fainted.
+static int first_fighter(void) {
+  int i;
+  for (i = 0; i < party_count; i++)
+    if (party[i].hp > 0) return i;
+  return -1;
 }
 
 // Show a two-line message; `after` says what happens when A closes it.
@@ -306,18 +343,27 @@ static void say_attack(const Mon* attacker, const Mon* target, int mv,
 }
 
 // Start a fight against wild species sp: make the wild POKEMON (level 2-4)
-// and show the first message.
+// and show the first message. The first POKEMON of your party that can still
+// fight goes in (normally the one you used last).
 void battle_begin(int sp) {
   char a[BT_LINE], b[BT_LINE];
   wild_species = sp;
   wild_mon.species = (unsigned char)sp;
   wild_mon.level = (unsigned char)(2 + rng_next() % 3u);
-  wild_mon.max_hp = species[sp].hp_base + 2 * wild_mon.level;
+  wild_mon.max_hp = max_hp_for(sp, wild_mon.level);
   wild_mon.hp = wild_mon.max_hp;
   wild_mon.exp = 0;
-  wild_mon.num_moves = 1;
-  wild_mon.move[0] = species[sp].move;
-  if (player_mon.hp <= 0) heal_party();                        // safety net
+  give_species_moves(&wild_mon);       // it attacks with move[0]; if you catch
+                                       // it, you get both moves
+  dex_seen[sp] = 1;                    // Pokedex: you have met it now
+  if (active_idx < 0 || active_idx >= party_count) active_idx = 0;
+  if (party[active_idx].hp <= 0) {     // the leader is fainted: pick another
+    int f = first_fighter();
+    if (f >= 0) active_idx = f;
+    else { heal_party(); active_idx = 0; }          // safety net
+  }
+  pt_forced = 0;
+  pt_note[0] = '\0';
   bt_cursor = 0;
   bt_redraw = BT_HUD | BT_BOX;
   str_set(a, BT_LINE, "A wild ");
@@ -345,6 +391,70 @@ static void enemy_attack(void) {
   take_damage(&player_mon, dmg);
   say_attack(&wild_mon, &player_mon, mv, dmg,
              (player_mon.hp <= 0) ? AFTER_LOSE : AFTER_MENU);
+}
+
+// ---------- The party screen ----------
+// The same screen is used in battle (bt_state == BS_PARTY) and from the main
+// menu (ui_screen == UI_PARTY). Only the way we ask for a redraw differs.
+
+// Ask render.c to draw the party screen again: everything (full = 1) or only
+// the list and the bottom line (full = 0).
+static void party_mark(int full) {
+  if (battle_open) bt_redraw |= full ? BT_PARTY : BT_LIST;
+  else             ui_redraw |= full ? UIR_FULL : UIR_BODY;
+}
+
+// Put "<name> <text>" into the party help line.
+static void party_say(const Mon* m, const char* text) {
+  str_set(pt_note, BT_LINE, mon_name(m));
+  str_add(pt_note, BT_LINE, text);
+}
+
+// Up/Down move the party cursor (it wraps around). Returns 1 if it moved.
+static int party_move_cursor(unsigned short pressed) {
+  int n = party_count;
+  if (n < 1) return 0;
+  if (pressed & KEY_DOWN)    pt_cursor = (pt_cursor + 1) % n;
+  else if (pressed & KEY_UP) pt_cursor = (pt_cursor + n - 1) % n;
+  else return 0;
+  pt_note[0] = '\0';
+  party_mark(0);
+  return 1;
+}
+
+// Open the party screen inside a battle. forced = 1 when your POKEMON just
+// fainted: you must choose, and the cursor starts on one that can fight.
+static void battle_party_open(int forced) {
+  int f = forced ? first_fighter() : active_idx;
+  bt_state = BS_PARTY;
+  pt_forced = forced;
+  pt_cursor = (f >= 0) ? f : 0;
+  pt_note[0] = '\0';
+  bt_redraw = BT_PARTY;                // (replaces any older redraw request)
+}
+
+// Send out party slot idx (it was checked: it can fight and is not active).
+// Only the number active_idx changes - nobody's HP, EXP, level or moves do.
+// A switch you chose costs your turn (AFTER_ENEMY: the wild one attacks the
+// newcomer). A forced switch is free (AFTER_MENU).
+static void switch_to(int idx) {
+  char a[BT_LINE], b[BT_LINE];
+  int forced = pt_forced;
+  int old = active_idx;
+  active_idx = idx;
+  pt_forced = 0;
+  str_set(b, BT_LINE, "Go! ");
+  str_add(b, BT_LINE, mon_name(&party[idx]));
+  str_add(b, BT_LINE, "!");
+  if (forced) {
+    say(AFTER_MENU, b, "");
+  } else {
+    str_set(a, BT_LINE, "Come back, ");
+    str_add(a, BT_LINE, mon_name(&party[old]));
+    str_add(a, BT_LINE, "!");
+    say(AFTER_ENEMY, a, b);
+  }
+  bt_redraw = BT_SCENE;                // new picture + panels + message box
 }
 
 // ---------- Catching ----------
@@ -375,6 +485,7 @@ static void throw_ball(void) {
 
 // The ball landed: roll the dice. Caught = it joins the party and the battle
 // ends WITHOUT the wild one attacking. Broke free = the wild one attacks.
+// (wild_mon already has both moves of its species, see battle_begin.)
 static void catch_result(void) {
   char l1[BT_LINE], l2[BT_LINE];
   int slot = -1;
@@ -398,16 +509,16 @@ static void catch_result(void) {
 }
 
 // ---------- Level-up ----------
-// PIKACHU has enough EXP for the next level: pay the EXP, go up one level,
-// raise max HP (and the current HP by the same amount, so a hurt PIKACHU stays
-// hurt) and show the news. Attacks get stronger by themselves because
-// calc_damage() uses the level.
+// The fighting POKEMON has enough EXP for the next level: pay the EXP, go up
+// one level, raise max HP (and the current HP by the same amount, so a hurt
+// POKEMON stays hurt) and show the news. Attacks get stronger by themselves
+// because calc_damage() uses the level.
 static void level_up(void) {
   char l1[BT_LINE], l2[BT_LINE];
   int old_max = player_mon.max_hp, new_max;
   player_mon.exp = (unsigned short)(player_mon.exp - exp_to_next(player_mon.level));
   player_mon.level = (unsigned char)(player_mon.level + 1);
-  new_max = max_hp_for_level(player_mon.level);
+  new_max = max_hp_for(player_mon.species, player_mon.level);
   player_mon.max_hp = new_max;
   player_mon.hp += new_max - old_max;
   if (player_mon.hp > new_max) player_mon.hp = new_max;   // stay inside 1..max
@@ -435,13 +546,13 @@ int battle_input(unsigned short pressed) {
   if (pressed & (KEY_UP | KEY_LEFT)) step = -1;
 
   if (bt_state == BS_MENU) {
-    // The menu is   FIGHT  CATCH     (bt_cursor 0, 1)
-    //               RUN              (bt_cursor 2)
+    // The menu is a 2x2 grid:  FIGHT (0)  CATCH (1)
+    //                          RUN (2)    POKEMON (3)
     int pos = bt_cursor;
-    if ((pressed & KEY_RIGHT) && pos == MENU_FIGHT) pos = MENU_CATCH;
-    if ((pressed & KEY_LEFT)  && pos == MENU_CATCH) pos = MENU_FIGHT;
-    if ((pressed & KEY_DOWN)  && pos == MENU_FIGHT) pos = MENU_RUN;
-    if ((pressed & KEY_UP)    && pos == MENU_RUN)   pos = MENU_FIGHT;
+    if ((pressed & KEY_RIGHT) && (pos & 1) == 0) pos++;
+    if ((pressed & KEY_LEFT)  && (pos & 1) == 1) pos--;
+    if ((pressed & KEY_DOWN)  && pos < 2)        pos += 2;
+    if ((pressed & KEY_UP)    && pos >= 2)       pos -= 2;
     if (pos != bt_cursor) { bt_cursor = pos; bt_redraw |= BT_BOX; }
     if (a) {
       if (bt_cursor == MENU_FIGHT) {
@@ -450,6 +561,8 @@ int battle_input(unsigned short pressed) {
         bt_redraw |= BT_BOX;
       } else if (bt_cursor == MENU_CATCH) {
         throw_ball();
+      } else if (bt_cursor == MENU_POKEMON) {
+        battle_party_open(0);
       } else {                                            // RUN: always works
         say(AFTER_END_RAN, "Got away safely!", "");
       }
@@ -459,6 +572,30 @@ int battle_input(unsigned short pressed) {
     if (step != 0 && n > 0) { bt_cursor = (bt_cursor + step + n) % n; bt_redraw |= BT_BOX; }
     if (b) { bt_state = BS_MENU; bt_cursor = 0; bt_redraw |= BT_BOX; }
     else if (a) player_attack(bt_cursor);
+  } else if (bt_state == BS_PARTY) {
+    if (party_move_cursor(pressed)) {
+      // (the cursor moved; party_move_cursor asked for the redraw)
+    } else if (b) {
+      if (pt_forced) {                                    // no way back
+        str_set(pt_note, BT_LINE, "Choose a POKEMON to continue!");
+        party_mark(0);
+      } else {                                            // back to the menu
+        bt_state = BS_MENU;
+        bt_cursor = MENU_POKEMON;
+        bt_redraw = BT_SCENE;
+      }
+    } else if (a) {
+      const Mon* pick = &party[pt_cursor];
+      if (!can_fight(pt_cursor)) {                        // fainted: refuse
+        party_say(pick, " has no energy left!");
+        party_mark(0);
+      } else if (pt_cursor == active_idx) {               // already out: refuse
+        party_say(pick, " is already in battle!");
+        party_mark(0);
+      } else {
+        switch_to(pt_cursor);
+      }
+    }
   } else if (a) {                                         // BS_MESSAGE
     switch (bt_after) {
       case AFTER_MENU:
@@ -474,7 +611,7 @@ int battle_input(unsigned short pressed) {
         str_set(l1, BT_LINE, "Wild ");
         str_add(l1, BT_LINE, mon_name(&wild_mon));
         str_add(l1, BT_LINE, " fainted!");
-        str_set(l2, BT_LINE, mon_name(&player_mon));
+        str_set(l2, BT_LINE, mon_name(&player_mon));      // the POKEMON that won
         if (player_mon.level >= MAX_LEVEL) {
           str_add(l2, BT_LINE, " is at max level!");
         } else {
@@ -500,18 +637,167 @@ int battle_input(unsigned short pressed) {
       case AFTER_LOSE:                                    // your POKEMON fainted
         str_set(l1, BT_LINE, mon_name(&player_mon));
         str_add(l1, BT_LINE, " fainted!");
-        say(AFTER_END_LOST, l1, "You rushed to the POKEMON CENTER!");
+        if (first_fighter() >= 0)                         // someone can go on
+          say(AFTER_CHOOSE, l1, "Choose your next POKEMON.");
+        else                                              // nobody: blackout
+          say(AFTER_END_LOST, l1, "You rushed to the POKEMON CENTER!");
+        break;
+      case AFTER_CHOOSE:                                  // pick the next one
+        battle_party_open(1);
         break;
       case AFTER_END_WON:    return BATTLE_WON;
       case AFTER_END_RAN:    return BATTLE_RAN;
       case AFTER_END_CAUGHT: return BATTLE_CAUGHT;
       case AFTER_END_LOST:
         heal_party();                                     // healed at the CENTER
+        active_idx = 0;                                   // PIKACHU leads again
         return BATTLE_LOST;
       default:
         break;
     }
   }
   return BATTLE_GOING;
+}
+
+// ---------- The main menu (START) ----------
+// ui_screen says which screen is open (UI_NONE = no menu). main.c calls
+// ui_open_menu() when START is pressed, then ui_input() every frame until it
+// returns 1. render.c draws whatever ui_redraw asks for (ui_draw).
+// Nothing here changes the game except: Options, and "make lead" in the
+// POKEMON summary (it only changes active_idx, like switching in battle).
+
+// Go to another screen (it is drawn completely, the cursor starts at the top).
+static void ui_goto(int screen) {
+  ui_screen = screen;
+  ui_cursor = 0;
+  ui_redraw = UIR_FULL;
+}
+
+// START was pressed while walking around (never in a battle or a dialogue).
+void ui_open_menu(void) {
+  ui_goto(UI_MENU);
+}
+
+// Move a cursor by step (-1 or +1) inside 0..n-1, wrapping around.
+static int wrap(int v, int step, int n) {
+  return (v + step + n) % n;
+}
+
+// Called every frame while a menu screen is open, with the buttons just
+// pressed. Returns 1 when the whole menu has closed (main repaints the map).
+int ui_input(unsigned short pressed) {
+  int a = (pressed & KEY_A) != 0;
+  int b = (pressed & KEY_B) != 0;
+  int step = 0;
+  if (pressed & KEY_DOWN) step = 1;
+  else if (pressed & KEY_UP) step = -1;
+
+  if (pressed & KEY_START) {                    // START closes everything
+    ui_screen = UI_NONE;
+    return 1;
+  }
+
+  switch (ui_screen) {
+    case UI_MENU:
+      if (step) {
+        ui_menu_cursor = wrap(ui_menu_cursor, step, NUM_MENU_ENTRIES);
+        ui_redraw |= UIR_BODY;
+      } else if (b) {
+        ui_screen = UI_NONE;
+        return 1;
+      } else if (a) {
+        switch (ui_menu_cursor) {
+          case ME_DEX:     ui_goto(UI_DEX);     break;
+          case ME_PARTY:
+            ui_goto(UI_PARTY);
+            pt_cursor = (active_idx < party_count) ? active_idx : 0;
+            pt_forced = 0;
+            pt_note[0] = '\0';
+            break;
+          case ME_BAG:     ui_goto(UI_BAG);     break;
+          case ME_TRAINER: ui_goto(UI_TRAINER); break;
+          case ME_SAVE:    ui_goto(UI_SAVE);    break;
+          case ME_OPTIONS: ui_goto(UI_OPTIONS); break;
+          default:                                      // ME_CLOSE
+            ui_screen = UI_NONE;
+            return 1;
+        }
+      }
+      break;
+
+    case UI_DEX:                                // look through the species
+      if (step) {
+        ui_cursor = wrap(ui_cursor, step, NUM_SPECIES);
+        ui_redraw |= UIR_BODY;
+      } else if (b) {
+        ui_goto(UI_MENU);
+      }
+      break;
+
+    case UI_PARTY:                              // A = summary, B = back
+      if (party_move_cursor(pressed)) {
+        // (cursor moved, redraw already requested)
+      } else if (b) {
+        ui_goto(UI_MENU);
+      } else if (a && pt_cursor < party_count) {
+        pt_note[0] = '\0';
+        ui_screen = UI_SUMMARY;
+        ui_redraw = UIR_FULL;
+      }
+      break;
+
+    case UI_SUMMARY:                            // Up/Down = next POKEMON
+      if (step) {
+        pt_cursor = wrap(pt_cursor, step, party_count);
+        pt_note[0] = '\0';
+        ui_redraw = UIR_FULL;
+      } else if (b) {
+        pt_note[0] = '\0';
+        ui_screen = UI_PARTY;
+        ui_redraw = UIR_FULL;
+      } else if (a) {                           // make it the lead POKEMON
+        const Mon* m = &party[pt_cursor];
+        if (m->hp <= 0) {
+          party_say(m, " has no energy left!");
+        } else if (pt_cursor == active_idx) {
+          party_say(m, " is already your lead.");
+        } else {
+          active_idx = pt_cursor;
+          party_say(m, " is now your lead!");
+        }
+        ui_redraw = UIR_FULL;
+      }
+      break;
+
+    case UI_BAG:
+    case UI_TRAINER:
+    case UI_SAVE:                               // read-only screens
+      if (a || b) ui_goto(UI_MENU);
+      break;
+
+    case UI_OPTIONS:
+      if (step) {
+        ui_cursor = wrap(ui_cursor, step, NUM_OPT_LINES);
+        ui_redraw |= UIR_BODY;
+      } else if (b) {
+        ui_goto(UI_MENU);
+      } else if (a || (pressed & (KEY_LEFT | KEY_RIGHT))) {
+        if (ui_cursor == OPT_SPEED) {
+          opt_fast = !opt_fast;
+          ui_redraw |= UIR_BODY;
+        } else if (ui_cursor == OPT_ENCOUNTERS) {
+          opt_encounters = !opt_encounters;
+          ui_redraw |= UIR_BODY;
+        } else if (a) {                         // BACK (A only)
+          ui_goto(UI_MENU);
+        }
+      }
+      break;
+
+    default:                                    // should never happen: close
+      ui_screen = UI_NONE;
+      return 1;
+  }
+  return 0;
 }
 // END OF world.c
