@@ -162,7 +162,7 @@ const int num_warps = (int)(sizeof(warps) / sizeof(warps[0]));
 const Npc npcs[] = {
   { R_TOWN,    5, 5, 1, "The tall grass can hide wild Pokemon!", 0 },
   { R_TOWN,   12, 5, 1, "The POKEMON CENTER on this street heals your team for free.", 0 },
-  { R_CENTER,  6, 2, 3, "Welcome to the POKEMON CENTER!|We heal your POKEMON back to perfect health.|Thank you for waiting! PIKACHU has been healed to full health!|We hope to see you again!", 1 },
+  { R_CENTER,  6, 2, 3, "Welcome to the POKEMON CENTER!|We heal your POKEMON back to perfect health.|Thank you for waiting! Your POKEMON have been healed to full health!|We hope to see you again!", 1 },
   { R_MART,    6, 2, 3, "Hello! Take a look at our supplies.|Come back any time!", 0 },
   { R_HOUSE1, 11, 3, 1, "Have you been exploring the town?|Be careful out there, and come home soon!", 0 },
   { R_HOUSE2, 10, 6, 1, "Every great journey begins somewhere.|Take your time and enjoy the road.", 0 },
@@ -171,25 +171,28 @@ const Npc npcs[] = {
 // How many people there are (other files read this number).
 const int num_npcs = (int)(sizeof(npcs) / sizeof(npcs[0]));
 
-// ---------- Wild POKEMON ----------
+// ---------- POKEMON species ----------
 // Placeholder pictures: 8x8 letters, drawn 4x bigger on the encounter screen.
 // B = body color, A = accent color, K = outline, E = eye, Y = yellow, . = empty.
 // Order must match the SP_ numbers in game.h.
+// hp_base: every POKEMON has max HP = hp_base + 2 * level (see world.c).
+// move / move2: the first and second move. A wild POKEMON attacks with its
+// first move; when you catch one it knows BOTH.
 const Species species[NUM_SPECIES] = {
   { "Pidgey",   RGB15(18, 12, 6),  RGB15(30, 26, 19),
     "..KKKK.." ".KBBBBK." "KBBEBBBK" "KBBBBYYK" "KAABBBBK" ".KAAAAK." "..KYYK.." "..K..K..",
-    6, MV_GUST },
+    6, MV_GUST, MV_TACKLE },
   { "Rattata",  RGB15(17, 9, 21),  RGB15(30, 26, 22),
     ".KK..KK." "KBBKKBBK" "KBBBBBBK" "KBEBBEBK" "KBBBBBBK" "KBBAABBK" ".KBBBBK." "..KKKK..",
-    5, MV_TACKLE },
+    5, MV_TACKLE, MV_QUICK_ATTACK },
   { "Caterpie", RGB15(8, 24, 8),   RGB15(31, 28, 6),
     "..K..K.." ".KBBBBK." "KBEBBEBK" "KBBBBBBK" ".KBBBBK." ".KAAAAK." "..KBBK.." "...KK...",
-    6, MV_TACKLE },
-  // Your PIKACHU (yellow body, red cheeks). hp_base and move are not used for
-  // it: its HP and moves live in party[0] below.
+    6, MV_TACKLE, MV_BUG_BITE },
+  // Your PIKACHU (yellow body, red cheeks). hp_base 10 gives 20 HP at level 5
+  // (10 + 2 * 5). Its real HP and moves live in party[0] below.
   { "Pikachu",  RGB15(31, 27, 6),  RGB15(30, 8, 6),
     "KK....KK" ".BK..KB." ".KBBBBK." "KBEBBEBK" "KAABBAAK" "KBBBBBBK" ".KBBBBK." "..KKKK..",
-    0, MV_THUNDER_SHOCK }
+    10, MV_THUNDER_SHOCK, MV_QUICK_ATTACK }
 };
 
 // ---------- Moves ----------
@@ -198,7 +201,8 @@ const Move moves[NUM_MOVES] = {
   { "Thunder Shock", 40 },
   { "Quick Attack",  35 },
   { "Tackle",        35 },
-  { "Gust",          40 }
+  { "Gust",          40 },
+  { "Bug Bite",      35 }
 };
 
 // Encounter tables. Each line: species and weight (bigger = more common).
@@ -212,6 +216,13 @@ const Zone zones[] = {
   { R_ROUTE1, 15, (unsigned char)(sizeof(route1_wild) / sizeof(route1_wild[0])), route1_wild }
 };
 const int num_zones = (int)(sizeof(zones) / sizeof(zones[0]));
+
+// ---------- Main menu text ----------
+// Order must match the ME_ numbers in game.h. (The font has no accent letters,
+// so it says POKEDEX, not "Pokedex with an accent".)
+const char* const menu_labels[NUM_MENU_ENTRIES] = {
+  "POKEDEX", "POKEMON", "BAG", "TRAINER", "SAVE", "OPTIONS", "CLOSE"
+};
 // ---------- Trainer art ----------
 // Sprite colors: K outline, B cap, S skin, H hair, Y shirt, J jeans, R shoes
 const char art_down[16][17] = {
@@ -300,13 +311,21 @@ int walk_frame = 0;
 int walk_timer = 0;
 int wild_species = -1;   // species of the current wild encounter (SP_...), -1 = none
 // Your party. Slot 0 is your starter PIKACHU: level 5, 20/20 HP, 0 EXP, two
-// moves. (HP follows 10 + 2 * level, see max_hp_for_level in world.c.)
+// moves. (HP follows hp_base + 2 * level, see max_hp_for in world.c.)
 // The other slots are empty until you catch something.
 Mon party[PARTY_MAX] = {
   { SP_PIKACHU, 5, 20, 20, 0, 2, { MV_THUNDER_SHOCK, MV_QUICK_ATTACK } }
 };
 int party_count = 1;
+int active_idx = 0;      // PIKACHU fights first
 int pokeballs = START_BALLS;
+// Pokedex: which species you have met (seen) and owned (caught).
+// You start with PIKACHU, so it counts as both.
+unsigned char dex_seen[NUM_SPECIES]   = { [SP_PIKACHU] = 1 };
+unsigned char dex_caught[NUM_SPECIES] = { [SP_PIKACHU] = 1 };
+unsigned int play_frames = 0;   // main adds 1 every frame (shown as play time)
+int opt_fast = 0;               // Options: walk speed (0 = normal, 1 = fast)
+int opt_encounters = 1;         // Options: wild POKEMON on (1) or off (0)
 Mon wild_mon;            // filled in by battle_begin() for every new fight
 int bt_state = BS_MESSAGE;
 int bt_cursor = 0;
@@ -314,6 +333,13 @@ int bt_after = AFTER_MENU;
 int bt_redraw = 0;
 char bt_line1[BT_LINE];
 char bt_line2[BT_LINE];
+int pt_cursor = 0;       // party screen: chosen slot
+int pt_forced = 0;       // party screen: 1 = you must choose (no way back)
+char pt_note[BT_LINE];   // party screen: help line at the bottom ("" = none)
+int ui_screen = UI_NONE; // main menu: which screen is open
+int ui_menu_cursor = 0;
+int ui_cursor = 0;
+int ui_redraw = 0;
 const Room rooms[NUM_ROOMS] = {
   { town_rows,   town_keys,   town_kinds,   TW_TREE,      0, NO_TILE, build_town   },
   { center_rows, center_keys, center_kinds, SOLID_INSIDE, 1, NO_TILE, build_center },
